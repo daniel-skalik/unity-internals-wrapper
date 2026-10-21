@@ -1,0 +1,25 @@
+{
+    "name": "DandaUtils.UnityInternalsGenerator.Tests",
+    "rootNamespace": "DandaUtils.Editor.UnityInternalsGenerator.Tests",
+    "references": [
+        "DandaUtils.UnityInternalsGenerator.Editor",
+        "DandaUtils.UnityInternalsGenerator.Tests.Fixture",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
