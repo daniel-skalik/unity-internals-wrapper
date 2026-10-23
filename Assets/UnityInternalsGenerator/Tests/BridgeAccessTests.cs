@@ -94,11 +94,11 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
-        public void UsedAssemblyNames_ContainsExistingBridge()
+        public void UsedAssemblyNames_ContainsProjectAssembly()
         {
             var root = Directory.GetParent(Application.dataPath).FullName;
             var names = UsedAssemblyNames.Collect(root, null);
-            Assert.IsTrue(names.Contains("Unity.InternalAPIEngineBridge.020"));
+            Assert.IsTrue(names.Contains("DandaUtils.UnityInternalsGenerator.Tests"));
         }
 
         [Test]

@@ -1,0 +1,14 @@
+# Checks the daemon runs before merging. Unity 6000.0.59f2 is the version this
+# project is verified against (ProjectSettings/ProjectVersion.txt); the editor
+# path is absolute because Unity.exe is not on PATH.
+#
+# `test` compiles the editor + test assemblies and runs the EditMode suite, so
+# it doubles as the build gate — Unity exits non-zero on a compile error or a
+# failing test. No separate `build` key: it would only launch Unity a second
+# time for the same answer.
+#
+# No `lint`: CLAUDE.md calls for Rider static analysis, but no Rider/ReSharper
+# command-line inspector is installed on this machine and InspectCode needs a
+# .sln that Unity generates and .gitignore excludes.
+checks:
+  test: '"C:\Program Files\Unity\Hub\Editor\6000.0.59f2\Editor\Unity.exe" -batchmode -runTests -projectPath . -testPlatform EditMode -testResults .utmp\results.xml -logFile -'
