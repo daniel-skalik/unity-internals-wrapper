@@ -2,7 +2,6 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
 {
     using System;
     using System.Collections.Generic;
-    using System.Linq;
     using DandaUtils.Editor.UnityInternalsGenerator.Model;
     using DandaUtils.Editor.UnityInternalsGenerator.Naming;
 
@@ -23,15 +22,11 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
 
     public sealed class UnsupportedConversionRule : IConversionRule
     {
-        private const string c_IsByRefLikeAttribute = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
-
         public string Name => "Unsupported";
 
-        public bool Match(Type t, GenerationContext ctx) => t.IsPointer || t == typeof(TypedReference) || IsByRefLike(t);
+        public bool Match(Type t, GenerationContext ctx) => t.IsPointer || t == typeof(TypedReference) || GenerationContext.IsByRefLike(t);
 
         public Conversion Create(Type t, GenerationContext ctx) => Conversion.Unsupported(t.IsPointer ? "pointer type" : "ref struct / TypedReference");
-
-        private static bool IsByRefLike(Type t) => t.IsValueType && t.GetCustomAttributesData().Any(a => a.AttributeType.FullName == c_IsByRefLikeAttribute);
     }
 
     public sealed class ByRefConversionRule : IConversionRule

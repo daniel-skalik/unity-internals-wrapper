@@ -18,9 +18,9 @@ Source is plain Unity editor code — it must sit inside a Unity project's `Asse
   | | files | Wrapped | Deferred | Unsupported | Excluded | NotAccessible | NameCollision | CompileFailed |
   |---|---|---|---|---|---|---|---|---|
   | step 1 | 912 | 6799 | 14840 | 124 | 1822 | 19069 | 0 | 15 |
-  | step 2 | 2503 | 22524 | 2188 | 277 | 1925 | 19224 | 82 | 27 |
+  | step 2 | 2503 | 22522 | 2188 | 278 | 1924 | 19222 | 82 | 25 |
 
-  (`NameCollision` is new because wrapper-reserved names are now rejected; the extra `CompileFailed` are instance members whose signatures reach assemblies outside the reference set, see A11.)
+  (`NameCollision` is new because wrapper-reserved names are now rejected; the remaining `CompileFailed` are instance members whose signatures reach assemblies outside the reference set, see A11. The one extra `Unsupported` over the first step 2 measurement is a `ref struct`, now rejected by classification instead of by the compile loop, which is what removes two `CompileFailed`.)
 
 ## Planned steps (from design)
 1. ~~Skeleton~~ ✅

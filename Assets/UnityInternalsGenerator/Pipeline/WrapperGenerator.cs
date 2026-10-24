@@ -173,15 +173,15 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
                     w.Line();
                     using (w.Block("private static " + c_FactoryMapType + " Build()"))
                     {
-                        w.Line("var map = new " + c_FactoryMapType + "(" + Count(classes.Count) + ");");
-                        for (var chunk = 0; chunk < chunks; chunk++) w.Line("Add" + Count(chunk) + "(map);");
+                        w.Line("var map = new " + c_FactoryMapType + "(" + Invariant(classes.Count) + ");");
+                        for (var chunk = 0; chunk < chunks; chunk++) w.Line("Add" + Invariant(chunk) + "(map);");
                         w.Line("return map;");
                     }
 
                     for (var chunk = 0; chunk < chunks; chunk++)
                     {
                         w.Line();
-                        using (w.Block("private static void Add" + Count(chunk) + "(" + c_FactoryMapType + " map)"))
+                        using (w.Block("private static void Add" + Invariant(chunk) + "(" + c_FactoryMapType + " map)"))
                         {
                             foreach (var t in classes.Skip(chunk * c_RegistrationsPerMethod).Take(c_RegistrationsPerMethod))
                             {
@@ -219,6 +219,6 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
             w.Line("#pragma warning disable 0612, 0618");
         }
 
-        private static string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+        private static string Invariant(int value) => value.ToString(CultureInfo.InvariantCulture);
     }
 }

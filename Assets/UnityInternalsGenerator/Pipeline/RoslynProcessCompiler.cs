@@ -16,6 +16,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
     {
         private const int c_TimeoutMilliseconds = 10 * 60 * 1000;
 
+        private static readonly Regex s_Located = new Regex(@"^(?<file>.+)\((?<line>\d+),\d+\): (?<sev>error|warning) (?<code>CS\d+): (?<msg>.*)$", RegexOptions.Compiled);
+        private static readonly Regex s_Unlocated = new Regex(@"^(?:.*?: )?(?<sev>error|warning) (?<code>CS\d+): (?<msg>.*)$", RegexOptions.Compiled);
+
         private readonly string m_OutputDirectory;
 
         /// <summary>By default sources and the assembly go to a temp folder that is deleted again. With an output directory that folder is used and kept, so the produced DLL can be loaded.</summary>
@@ -23,9 +26,6 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
         {
             m_OutputDirectory = outputDirectory;
         }
-
-        private static readonly Regex s_Located = new Regex(@"^(?<file>.+)\((?<line>\d+),\d+\): (?<sev>error|warning) (?<code>CS\d+): (?<msg>.*)$", RegexOptions.Compiled);
-        private static readonly Regex s_Unlocated = new Regex(@"^(?:.*?: )?(?<sev>error|warning) (?<code>CS\d+): (?<msg>.*)$", RegexOptions.Compiled);
 
         public IReadOnlyList<CompilerDiagnostic> Compile(IReadOnlyList<GeneratedFile> files, string assemblyName, IReadOnlyList<string> references)
         {

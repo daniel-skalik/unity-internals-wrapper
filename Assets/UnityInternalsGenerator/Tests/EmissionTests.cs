@@ -236,7 +236,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, "UnityInternalsFixture.Collide", "Field", "value").Status);
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, "UnityInternalsFixture.Collide", "Field", "Value").Status);
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, "UnityInternalsFixture.Clash", "Field", "clash").Status);
-            Assert.IsFalse(result.Entries.Any(e => e.Status == WrapStatus.NameCollision && e.Rule != "PathCollision" && e.Id.Contains("|UnityInternalsFixture.ReservedNames|") == false)); // only CaseTwin/Casetwin (file path) and ReservedNames (wrapper-owned names) collide
+            Assert.IsFalse(result.Entries.Any(e => e.Status == WrapStatus.NameCollision && e.Rule != "PathCollision" && e.Rule != "ReservedName" && e.Id.Contains("|UnityInternalsFixture.ReservedNames|") == false)); // only CaseTwin/Casetwin (file path), ReservedNames and ReservedNested's nested Target (wrapper-owned names) collide
         }
 
         [Test]

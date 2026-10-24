@@ -39,6 +39,7 @@ namespace UnityInternalsFixture
     {
         internal static int StaticValue => 7;            // Wrapped
         internal int InstanceValue => 1;                 // Wrapped since step 2
+        internal int this[Point p] => p.X;               // index parameter of a wrapped type
         public static Holder operator +(Holder a, Holder b) => a; // Deferred (operator, step 3)
     }
 
@@ -77,6 +78,7 @@ namespace UnityInternalsFixture
 
         internal Branch() { }
         internal Branch(int size) { Size = size; }
+        internal Branch(Point corner) { Corner = corner; }   // ctor parameter of a wrapped type
 
         internal string Label { get; set; }
         internal Point Origin { get; set; }
@@ -108,6 +110,14 @@ namespace UnityInternalsFixture
         internal int Target => 2;                           // NameCollision: reserved by the wrapper
         internal int Fine => 3;                             // Wrapped
     }
+
+    internal class ReservedNested
+    {
+        internal int Fine => 3;                             // Wrapped
+        internal enum Target { A }                          // NameCollision: reserved by the wrapper
+    }
+
+    internal ref struct FixtureRefStruct { }    // Unsupported: a ref struct fits no wrapper shape
 
     internal delegate void Callback();      // Deferred (step 3)
     internal class Generic<T> { }           // Unsupported GenericType

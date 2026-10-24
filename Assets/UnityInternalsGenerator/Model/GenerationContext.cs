@@ -13,6 +13,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
     public sealed class GenerationContext
     {
         private const string c_CompilerGeneratedAttribute = "System.Runtime.CompilerServices.CompilerGeneratedAttribute";
+        private const string c_IsByRefLikeAttribute = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
 
         private readonly GenerationInput m_Input;
         private readonly HashSet<Assembly> m_Sources;
@@ -24,6 +25,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         private readonly Dictionary<Type, MemberPlan> m_Plans = new Dictionary<Type, MemberPlan>();
         private readonly Dictionary<Type, Conversion> m_Conversions = new Dictionary<Type, Conversion>();
         private readonly Dictionary<Assembly, bool> m_Grants = new Dictionary<Assembly, bool>();
+        private readonly Dictionary<Type, HashSet<string>> m_EmittedShapes = new Dictionary<Type, HashSet<string>>();
         private readonly List<ReportEntry> m_Entries = new List<ReportEntry>();
         private readonly Func<Type, string> m_WrappedTypeMap;
         private HashSet<string> m_EmittedTypeIds;
@@ -91,19 +93,30 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             var declaring = m.DeclaringType;
             if (declaring == null) return false;
 
-            var name = MemberSyntax.WrappedName(m, this);
-            var signature = MemberSyntax.Signature(m, this);
+            var shape = EmittedShape(m);
             for (var b = WrapperBase(declaring); b != null; b = WrapperBase(b))
             {
-                foreach (var planned in PlanFor(b))
-                {
-                    if (IsEmitted(planned.Member) == false) continue;
-                    if (string.CompareOrdinal(MemberSyntax.WrappedName(planned.Member, this), name) != 0) continue;
-                    if (string.CompareOrdinal(MemberSyntax.Signature(planned.Member, this), signature) == 0) return true;
-                }
+                if (EmittedShapes(b).Contains(shape)) return true;
             }
             return false;
         }
+
+        /// <summary>Memoized emitted shapes of one wrapper's own members; building them walks the whole parameter pipeline, so it happens once per type.</summary>
+        private HashSet<string> EmittedShapes(Type t)
+        {
+            if (m_EmittedShapes.TryGetValue(t, out var cached)) return cached;
+
+            var shapes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var planned in PlanFor(t))
+            {
+                if (IsEmitted(planned.Member)) shapes.Add(EmittedShape(planned.Member));
+            }
+            m_EmittedShapes[t] = shapes;
+            return shapes;
+        }
+
+        /// <summary>Emitted name plus, where overloadable, the emitted parameter-type signature. Two members with the same shape cannot coexist on one type.</summary>
+        private string EmittedShape(MemberInfo m) => MemberSyntax.WrappedName(m, this) + MemberSyntax.Signature(m, this);
 
         private static bool IsStaticClass(Type t) => t.IsClass && t.IsAbstract && t.IsSealed;
 
@@ -222,9 +235,15 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
                 var declaringStatus = Classify(declaring).Status;
                 if (declaringStatus == WrapStatus.Excluded || declaringStatus == WrapStatus.NotAccessible) return new TypeClassification(declaringStatus, "NestedInUnwrappedType", Classify(declaring).RuleName == "AutoExclusion" ? "Declaring type auto-excluded: failed to compile" : "Declaring type is " + declaringStatus);
                 if (declaringStatus != WrapStatus.Wrapped) return new TypeClassification(WrapStatus.Deferred, "NestedInUnwrappedType", "Declaring type is " + declaringStatus);
+
+                var nestedName = CSharpNames.TypeDeclName(t);
+                if (IsInstanceWrapper(declaring) && WrapperSyntax.IsReserved(nestedName)) return new TypeClassification(WrapStatus.NameCollision, "ReservedName", "Name reserved by the wrapper '" + nestedName + "'");
             }
 
             if (t.IsEnum == false && typeof(Delegate).IsAssignableFrom(t)) return new TypeClassification(WrapStatus.Deferred, "Delegate", "Delegate wrapper (step 3)");
+
+            // A ref struct cannot be a wrapper field and cannot be boxed, so no wrapper shape fits it. The conversion rules reject it in signature position too.
+            if (IsByRefLike(t)) return new TypeClassification(WrapStatus.Unsupported, "RefStruct", "ref struct");
 
             foreach (var rule in m_TypeRules)
             {
@@ -270,6 +289,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             }
             return false;
         }
+
+        /// <summary>True when the type is a <c>ref struct</c> (ByRefLike): it can only live on the stack, so it fits neither a wrapper field nor a boxed comparison.</summary>
+        public static bool IsByRefLike(Type t) => t.IsValueType && t.GetCustomAttributesData().Any(a => a.AttributeType.FullName == c_IsByRefLikeAttribute);
 
         /// <summary>True when the member itself (not its declaring chain) is compiler-generated.</summary>
         internal static bool IsCompilerGeneratedMember(MemberInfo m) => m.Name.Contains('<') || m.GetCustomAttributesData().Any(a => a.AttributeType.FullName == c_CompilerGeneratedAttribute);

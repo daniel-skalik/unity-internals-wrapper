@@ -153,8 +153,11 @@ are not.
 | `Indexer (step 2)` | member Deferred | Wrapped |
 | `WrapperConversion (step 2)` | member Deferred | Wrapped |
 | — | ctor `No member rule matched` (Unsupported) | Wrapped, or `Inheritable (step 6)` on abstract types |
+| `ref struct` | type Deferred (`Struct wrapper (step 2)`) | type Unsupported — no wrapper shape fits a ByRefLike value |
+| `Name reserved by the wrapper '<name>'` | nested type Wrapped (CS0102 in the generated file) | type NameCollision |
 
-New: `Inheritable (step 6)`, `Parameterless struct constructor`, `Name reserved by the wrapper '<name>'`.
+New: `Inheritable (step 6)`, `Parameterless struct constructor`, `Name reserved by the wrapper '<name>'` (members and
+nested types of instance wrappers), `ref struct`.
 Untouched: delegates, events, operators, generic methods, arrays/collections/`Nullable`, `ref`/`out`, generic
 parameters, public types' internal members, privates.
 

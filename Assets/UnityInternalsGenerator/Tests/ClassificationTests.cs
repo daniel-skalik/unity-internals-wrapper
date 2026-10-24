@@ -72,6 +72,28 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void Types_RefStruct_Unsupported()
+        {
+            var refStruct = Fixture("FixtureRefStruct");
+            Assert.IsTrue(GenerationContext.IsByRefLike(refStruct));
+
+            var classification = NewContext().Classify(refStruct);
+            Assert.AreEqual(WrapStatus.Unsupported, classification.Status);
+            Assert.AreEqual("ref struct", classification.Reason);
+        }
+
+        [Test]
+        public void Types_NestedTypeWithAReservedName_NameCollision()
+        {
+            var ctx = NewContext();
+            var nested = ctx.Classify(Fixture("ReservedNested+Target"));
+
+            Assert.AreEqual(WrapStatus.NameCollision, nested.Status);
+            Assert.AreEqual("Name reserved by the wrapper 'Target'", nested.Reason);
+            AssertStatus(ctx, "ReservedNested", WrapStatus.Wrapped);
+        }
+
+        [Test]
         public void Types_GenericDefinition_Unsupported()
         {
             AssertStatus(NewContext(), "Generic`1", WrapStatus.Unsupported);

@@ -50,6 +50,10 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
         private static PropertyInfo Property(string wrapper, string name) => Wrapper(wrapper).GetProperty(name, c_Declared);
 
+        /// <summary>The wrapper's indexer with exactly these index parameter types (a wrapper can declare several).</summary>
+        private static PropertyInfo Indexer(string wrapper, params Type[] parameterTypes) =>
+            Wrapper(wrapper).GetProperties(c_Declared).Single(p => p.GetIndexParameters().Select(i => i.ParameterType).SequenceEqual(parameterTypes));
+
         [Test]
         public void ClassWrapper_WrapNull_IsNull()
         {
@@ -173,7 +177,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
             Assert.AreEqual(3, Property("Branch", "Size").GetValue(wrapper));
             Assert.AreEqual(6, Method("Branch", "Twice").Invoke(wrapper, null));
-            Assert.AreEqual(5, Property("Branch", "Item").GetValue(wrapper, new object[] { 2 }));
+            Assert.AreEqual(5, Indexer("Branch", typeof(int)).GetValue(wrapper, new object[] { 2 }));
             Assert.AreEqual("branch", Method("Branch", "Describe").Invoke(wrapper, null));
 
             Property("Branch", "Label").SetValue(wrapper, "leafy");
@@ -181,6 +185,16 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
             Property("Branch", "Size").SetValue(wrapper, 10);
             Assert.AreEqual(20, Method("Branch", "Twice").Invoke(wrapper, null));
+        }
+
+        [Test]
+        public void ConstructorAndIndexer_TakingAWrappedType_CrossTheBoundary()
+        {
+            var point = Wrap("Point", Unity("Point", 9));
+            var branch = Activator.CreateInstance(Wrapper("Branch"), new[] { point });
+
+            Assert.AreEqual(9, Property("Point", "X").GetValue(Property("Branch", "Corner").GetValue(branch)));
+            Assert.AreEqual(9, Indexer("Holder", Wrapper("Point")).GetValue(Activator.CreateInstance(Wrapper("Holder")), new[] { point }));
         }
 
         [Test]

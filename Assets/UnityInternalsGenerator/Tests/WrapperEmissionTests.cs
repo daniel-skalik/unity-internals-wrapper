@@ -118,6 +118,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
                 "        public int Twice() => m_Value.Twice();",
                 "        public Branch() : this(new global::UnityInternalsFixture.Branch()) { }",
                 "        public Branch(int size) : this(new global::UnityInternalsFixture.Branch(size)) { }",
+                "        public Branch(global::WrappedUnityInternalsFixture.Point corner) : this(new global::UnityInternalsFixture.Branch((corner).m_Value)) { }",
             })
             {
                 AssertContainsLine(branch, line);
@@ -205,6 +206,29 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void ReservedNames_NestedType_IsACollision_AndTheOuterWrapperStillEmits()
+        {
+            var result = Generate();
+            var nested = Entry(result, MemberId.Type(Fixture("ReservedNested+Target")));
+            Assert.AreEqual(WrapStatus.NameCollision, nested.Status);
+            StringAssert.Contains("reserved by the wrapper", nested.Reason);
+
+            var file = File(result, "WrappedUnityInternalsFixture/ReservedNested.g.cs");
+            AssertContainsLine(file, "        public int Fine => m_Value.Fine;");
+            StringAssert.DoesNotContain("enum Target", file.Content);
+        }
+
+        [Test]
+        public void RefStruct_IsUnsupported_AndEmitsNothing()
+        {
+            var result = Generate();
+
+            Assert.AreEqual(WrapStatus.Unsupported, Entry(result, MemberId.Type(Fixture("FixtureRefStruct"))).Status);
+            Assert.AreEqual("ref struct", Entry(result, MemberId.Type(Fixture("FixtureRefStruct"))).Reason);
+            CollectionAssert.DoesNotContain(result.Files.Select(f => f.RelativePath).ToList(), "WrappedUnityInternalsFixture/FixtureRefStruct.g.cs");
+        }
+
+        [Test]
         public void AbstractType_ConstructorDeferredToStep6_MembersStillWrapped()
         {
             var result = Generate();
@@ -258,12 +282,30 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         [Test]
         public void Selection_ConstructorNeedingAWrappedType_AutoIncludesIt()
         {
-            var catalog = WrapperGenerator.BuildCatalog(Input());
-            var indexer = catalog.ChildrenOf(MemberId.Type(Fixture("Branch"))).Single(n => n.Kind == NodeKind.Indexer);
-            Assert.AreEqual(WrapStatus.Wrapped, indexer.Status);
+            var ctor = MemberId.Member(Fixture("Branch").GetConstructor(c_Declared, null, new[] { Fixture("Point") }, null));
+            var result = WrapperGenerator.Generate(Input(new SelectionRules(new[] { ctor }, Array.Empty<string>())));
 
-            var corner = catalog.ChildrenOf(MemberId.Type(Fixture("Branch"))).Single(n => n.Name == "Corner");
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, ctor).Status);
+            Assert.AreEqual(ctor, result.Selection.AutoIncludedBy[MemberId.Type(Fixture("Point"))]);
+        }
+
+        [Test]
+        public void Selection_IndexerNeedingAWrappedType_AutoIncludesIt()
+        {
+            var indexer = MemberId.Member(Fixture("Holder").GetProperties(c_Declared).Single(p => p.GetIndexParameters().Any(i => i.ParameterType == Fixture("Point"))));
+            var result = WrapperGenerator.Generate(Input(new SelectionRules(new[] { indexer }, Array.Empty<string>())));
+
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, indexer).Status);
+            Assert.AreEqual(indexer, result.Selection.AutoIncludedBy[MemberId.Type(Fixture("Point"))]);
+            AssertContainsLine(File(result, "WrappedUnityInternalsFixture/Holder.g.cs"), "        public int this[global::WrappedUnityInternalsFixture.Point p] => m_Value[(p).m_Value];");
+        }
+
+        [Test]
+        public void Selection_FieldNeedingAWrappedType_AutoIncludesIt()
+        {
+            var corner = WrapperGenerator.BuildCatalog(Input()).ChildrenOf(MemberId.Type(Fixture("Branch"))).Single(n => n.Name == "Corner");
             var result = WrapperGenerator.Generate(Input(new SelectionRules(new[] { corner.Id }, Array.Empty<string>())));
+
             Assert.AreEqual(corner.Id, result.Selection.AutoIncludedBy[MemberId.Type(Fixture("Point"))]);
         }
 

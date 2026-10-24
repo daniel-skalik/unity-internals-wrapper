@@ -125,10 +125,11 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         {
             if (m.IsSpecialName) return m.Name.StartsWith("op_", StringComparison.Ordinal) ? Verdict.Of(WrapStatus.Deferred, "Operator (step 3)") : Verdict.Of(WrapStatus.Unsupported, "SpecialName");
             if (m.IsGenericMethodDefinition) return Verdict.Of(WrapStatus.Deferred, "GenericMethod (step 3)");
+            if (IsVarArgs(m)) return Verdict.Of(WrapStatus.Unsupported, "VarArgs");
 
             var returns = ctx.Convert(m.ReturnType);
             if (returns.Status != WrapStatus.Wrapped) return FromConversion(returns);
-            return CheckParameters(m, m.GetParameters(), ctx);
+            return CheckParameters(m.GetParameters(), ctx);
         }
 
         /// <summary>The wrapper calls the real constructor, so an abstract type cannot offer one until the inheritable proxies of step 6.</summary>
@@ -137,20 +138,21 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             var t = c.DeclaringType;
             if (t.IsAbstract) return Verdict.Of(WrapStatus.Deferred, "Inheritable (step 6)");
             if (t.IsValueType && c.GetParameters().Length == 0) return Verdict.Of(WrapStatus.Unsupported, "Parameterless struct constructor");
-            return CheckParameters(c, c.GetParameters(), ctx);
+            if (IsVarArgs(c)) return Verdict.Of(WrapStatus.Unsupported, "VarArgs");
+            return CheckParameters(c.GetParameters(), ctx);
         }
 
         private static Verdict CheckIndexer(PropertyInfo p, GenerationContext ctx)
         {
             var value = ctx.Convert(p.PropertyType);
             if (value.Status != WrapStatus.Wrapped) return FromConversion(value);
-            return CheckParameters(null, p.GetIndexParameters(), ctx);
+            return CheckParameters(p.GetIndexParameters(), ctx);
         }
 
-        private static Verdict CheckParameters(MethodBase m, ParameterInfo[] ps, GenerationContext ctx)
-        {
-            if (m != null && (m.CallingConvention & CallingConventions.VarArgs) != 0) return Verdict.Of(WrapStatus.Unsupported, "VarArgs");
+        private static bool IsVarArgs(MethodBase m) => (m.CallingConvention & CallingConventions.VarArgs) != 0;
 
+        private static Verdict CheckParameters(ParameterInfo[] ps, GenerationContext ctx)
+        {
             foreach (var p in ps)
             {
                 var conversion = ctx.Convert(p.ParameterType);
