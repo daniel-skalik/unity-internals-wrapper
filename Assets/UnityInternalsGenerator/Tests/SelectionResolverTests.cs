@@ -55,7 +55,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             Assert.IsTrue(result.AutoIncludedBy.ContainsKey(TypeId("Mask")));
             Assert.IsFalse(result.AutoIncludedBy.ContainsKey(TypeId("StaticApi+Nested")));
             Assert.IsFalse(result.AutoIncludedBy.ContainsKey(TypeId("StaticApi")));
-            CollectionAssert.DoesNotContain(result.EmittedTypeIds, TypeId("Holder"));
+            CollectionAssert.Contains(result.EmittedTypeIds, TypeId("Holder")); // MakeHolder returns it
+            Assert.IsTrue(result.AutoIncludedBy.ContainsKey(TypeId("Holder")));
         }
 
         [Test]

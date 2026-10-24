@@ -16,6 +16,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             new GenericParameterConversionRule(),
             new PassthroughConversionRule(),
             new EnumCastConversionRule(),
+            new WrapperConversionRule(),
             new FallbackConversionRule(),
         };
     }
@@ -69,6 +70,16 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         public Conversion Create(Type t, GenerationContext ctx) => Conversion.Cast(ctx.WrappedTypeRef(t), CSharpNames.TypeRef(t));
     }
 
+    /// <summary>Internal class, struct or interface with a wrapper: Wrap() one way, the wrapper's value field the other.</summary>
+    public sealed class WrapperConversionRule : IConversionRule
+    {
+        public string Name => "WrapperConversion";
+
+        public bool Match(Type t, GenerationContext ctx) => ctx.IsInstanceWrapper(t);
+
+        public Conversion Create(Type t, GenerationContext ctx) => Conversion.Wrapper(ctx.WrappedTypeRef(t), t.IsValueType);
+    }
+
     public sealed class FallbackConversionRule : IConversionRule
     {
         public string Name => "Fallback";
@@ -85,7 +96,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             if (ctx.IsSourceType(t) == false) return Conversion.Unsupported("type outside source assemblies");
 
             var classification = ctx.Classify(t);
-            if (classification.Status == WrapStatus.Wrapped) return Conversion.Deferred("WrapperConversion (step 2)");
+            if (classification.Status == WrapStatus.Wrapped) return Conversion.Unsupported("Wrapped type without a conversion rule");
             return Conversion.NotWrapped(classification.Status, classification.Reason ?? classification.RuleName);
         }
     }

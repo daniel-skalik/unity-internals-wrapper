@@ -56,6 +56,57 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
 
         public bool IsWrappedType(Type t) => IsClassifiable(t) && Classify(t).Status == WrapStatus.Wrapped;
 
+        /// <summary>True when the type's wrapper holds a Unity value: class, struct and interface wrappers, not enums and not static classes.</summary>
+        public bool IsInstanceWrapper(Type t) => IsWrappedType(t) && t.IsEnum == false && IsStaticClass(t) == false;
+
+        /// <summary>
+        /// The wrapper the wrapper of <paramref name="t"/> derives from: the nearest internal base emitted as an instance wrapper.
+        /// Null when a public base comes first (then the wrapper is a root, see <see cref="PublicBase"/>) or when there is no base at all.
+        /// </summary>
+        public Type WrapperBase(Type t)
+        {
+            if (t == null || t.IsClass == false) return null;
+
+            for (var b = t.BaseType; b != null; b = b.BaseType)
+            {
+                if (b.IsVisible) return null;
+                if (IsEmitted(b) && IsInstanceWrapper(b)) return b;
+            }
+            return null;
+        }
+
+        /// <summary>First public base of the type, or null when that is <see cref="object"/> (a user-defined conversion to a base class is illegal) or there is none.</summary>
+        public static Type PublicBase(Type t)
+        {
+            for (var b = t.BaseType; b != null; b = b.BaseType)
+            {
+                if (b.IsVisible) return b == typeof(object) ? null : b;
+            }
+            return null;
+        }
+
+        /// <summary>True when the member's emitted shape repeats a name (and, where overloadable, a signature) an emitted wrapper base already declares, so it needs <c>new</c>.</summary>
+        public bool HidesWrapperBaseMember(MemberInfo m)
+        {
+            var declaring = m.DeclaringType;
+            if (declaring == null) return false;
+
+            var name = MemberSyntax.WrappedName(m, this);
+            var signature = MemberSyntax.Signature(m, this);
+            for (var b = WrapperBase(declaring); b != null; b = WrapperBase(b))
+            {
+                foreach (var planned in PlanFor(b))
+                {
+                    if (IsEmitted(planned.Member) == false) continue;
+                    if (string.CompareOrdinal(MemberSyntax.WrappedName(planned.Member, this), name) != 0) continue;
+                    if (string.CompareOrdinal(MemberSyntax.Signature(planned.Member, this), signature) == 0) return true;
+                }
+            }
+            return false;
+        }
+
+        private static bool IsStaticClass(Type t) => t.IsClass && t.IsAbstract && t.IsSealed;
+
         /// <summary>True when the compile loop auto-excluded this exact type or member id after a compile failure.</summary>
         public bool IsAutoExcludedId(string id) => m_AutoExcludedIds.Contains(id);
 
@@ -173,12 +224,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
                 if (declaringStatus != WrapStatus.Wrapped) return new TypeClassification(WrapStatus.Deferred, "NestedInUnwrappedType", "Declaring type is " + declaringStatus);
             }
 
-            if (t.IsEnum == false)
-            {
-                if (t.IsValueType) return new TypeClassification(WrapStatus.Deferred, "Struct", "Struct wrapper (step 2)");
-                if (t.IsInterface) return new TypeClassification(WrapStatus.Deferred, "Interface", "Interface wrapper (step 2)");
-                if (typeof(Delegate).IsAssignableFrom(t)) return new TypeClassification(WrapStatus.Deferred, "Delegate", "Delegate wrapper (step 3)");
-            }
+            if (t.IsEnum == false && typeof(Delegate).IsAssignableFrom(t)) return new TypeClassification(WrapStatus.Deferred, "Delegate", "Delegate wrapper (step 3)");
 
             foreach (var rule in m_TypeRules)
             {

@@ -89,6 +89,35 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void TypeKinds_StructAndInterface()
+        {
+            var catalog = Build();
+            Assert.AreEqual(NodeKind.Struct, catalog.Get(MemberId.Type(Fixture("Point"))).Kind);
+            Assert.AreEqual(NodeKind.Interface, catalog.Get(MemberId.Type(Fixture("IThing"))).Kind);
+            Assert.AreEqual(NodeKind.Class, catalog.Get(MemberId.Type(Fixture("Branch"))).Kind);
+        }
+
+        [Test]
+        public void MemberKinds_ConstructorAndIndexer()
+        {
+            var children = Build().ChildrenOf(MemberId.Type(Fixture("Branch")));
+            Assert.AreEqual(NodeKind.Indexer, children.First(n => n.Name == "Item").Kind);
+            Assert.IsTrue(children.Where(n => n.Name == ".ctor").All(n => n.Kind == NodeKind.Constructor));
+            Assert.AreEqual(2, children.Count(n => n.Name == ".ctor"));
+        }
+
+        [Test]
+        public void Member_Dependencies_ConstructorAndIndexerSignatures()
+        {
+            var catalog = Build();
+            var corner = catalog.ChildrenOf(MemberId.Type(Fixture("Branch"))).First(n => n.Name == "Corner");
+            CollectionAssert.Contains(corner.DependencyTypeIds, MemberId.Type(Fixture("Point"))); // field of a wrapped struct type
+
+            var shift = catalog.Get(MethodId("StaticApi", "Shift"));
+            CollectionAssert.AreEquivalent(new[] { MemberId.Type(Fixture("Point")) }, shift.DependencyTypeIds);
+        }
+
+        [Test]
         public void Member_Dependencies_ListWrappedTypes()
         {
             var next = Build().Get(MethodId("StaticApi", "Next"));
@@ -100,10 +129,10 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         public void NonWrappedTypes_HaveNoMembers()
         {
             var catalog = Build();
-            var point = catalog.Get(MemberId.Type(Fixture("Point")));
-            Assert.AreEqual(WrapStatus.Deferred, point.Status);
-            Assert.AreEqual(NodeKind.Other, point.Kind);
-            Assert.AreEqual(0, catalog.ChildrenOf(point.Id).Count);
+            var callback = catalog.Get(MemberId.Type(Fixture("Callback")));
+            Assert.AreEqual(WrapStatus.Deferred, callback.Status);
+            Assert.AreEqual(NodeKind.Other, callback.Kind);
+            Assert.AreEqual(0, catalog.ChildrenOf(callback.Id).Count);
             Assert.AreEqual(0, catalog.ChildrenOf(MemberId.Type(Fixture("Color8"))).Count);
         }
 

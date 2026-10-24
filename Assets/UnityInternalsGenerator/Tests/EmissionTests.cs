@@ -153,20 +153,24 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         public void StaticClass_NotEmitted_ForUnwrappedMembers()
         {
             var api = File(Generate(), "WrappedUnityInternalsFixture/StaticApi.g.cs").Content;
-            foreach (var name in new[] { " WithRef(", " Echo", " MakeHolder(", " Dead(", " Hidden(", " WithNullableMask(", "Changed", "get_Current", "k__BackingField", ".cctor" })
+            foreach (var name in new[] { " WithRef(", " Echo", " Dead(", " Hidden(", " WithNullableMask(", "Changed", "get_Current", "k__BackingField", ".cctor" })
             {
                 StringAssert.DoesNotContain(name, api);
             }
         }
 
         [Test]
-        public void NonStaticClass_PrivateCtorFirst_StaticMembersOnly()
+        public void InstanceClass_WithoutPublicBase_HasNoTargetAndKeepsStaticMembers()
         {
-            var holder = File(Generate(), "WrappedUnityInternalsFixture/Holder.g.cs").Content;
-            StringAssert.Contains("    public class Holder\n    {\n        private Holder() { }\n", holder);
-            StringAssert.Contains("        public static int StaticValue => global::UnityInternalsFixture.Holder.StaticValue;\n", holder);
-            StringAssert.DoesNotContain("InstanceValue", holder);
-            StringAssert.DoesNotContain("operator", holder);
+            var holder = File(Generate(), "WrappedUnityInternalsFixture/Holder.g.cs");
+            AssertContainsLine(holder, "    public class Holder");
+            AssertContainsLine(holder, "        internal readonly global::UnityInternalsFixture.Holder m_Value;");
+            AssertContainsLine(holder, "        public static int StaticValue => global::UnityInternalsFixture.Holder.StaticValue;");
+            AssertContainsLine(holder, "        public int InstanceValue => m_Value.InstanceValue;");
+            AssertContainsLine(holder, "        public Holder() : this(new global::UnityInternalsFixture.Holder()) { }");
+            StringAssert.DoesNotContain("Target", holder.Content);
+            StringAssert.DoesNotContain("implicit operator", holder.Content);
+            StringAssert.DoesNotContain("op_Addition", holder.Content);
         }
 
         [Test]
@@ -176,8 +180,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             Assert.AreEqual(WrapStatus.Deferred, Entry(result, c_Api, "Method", "WithRef").Status);
             Assert.AreEqual(WrapStatus.Deferred, Entry(result, c_Api, "Method", "Echo``1").Status);
             Assert.AreEqual("GenericMethod (step 3)", Entry(result, c_Api, "Method", "Echo``1").Reason);
-            Assert.AreEqual(WrapStatus.Deferred, Entry(result, c_Api, "Method", "MakeHolder").Status);
-            Assert.AreEqual("WrapperConversion (step 2)", Entry(result, c_Api, "Method", "MakeHolder").Reason);
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, c_Api, "Method", "MakeHolder").Status);
             Assert.AreEqual(WrapStatus.Excluded, Entry(result, c_Api, "Method", "Dead").Status);
             Assert.AreEqual("ObsoleteError", Entry(result, c_Api, "Method", "Dead").Reason);
             Assert.AreEqual(WrapStatus.NotAccessible, Entry(result, c_Api, "Method", "Hidden").Status);
@@ -196,9 +199,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             Assert.AreEqual("default dropped", withDate.Reason);
 
             var holder = "UnityInternalsFixture.Holder";
-            Assert.AreEqual(WrapStatus.Deferred, Entry(result, holder, "Property", "InstanceValue").Status);
-            Assert.AreEqual("InstanceMembers (step 2)", Entry(result, holder, "Property", "InstanceValue").Reason);
-            Assert.AreEqual(WrapStatus.Deferred, Entry(result, holder, "Ctor", ".ctor").Status);
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, holder, "Property", "InstanceValue").Status);
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, holder, "Ctor", ".ctor").Status);
             Assert.AreEqual("Operator (step 3)", Entry(result, holder, "Method", "op_Addition").Reason);
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, holder, "Property", "StaticValue").Status);
         }
@@ -234,7 +236,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, "UnityInternalsFixture.Collide", "Field", "value").Status);
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, "UnityInternalsFixture.Collide", "Field", "Value").Status);
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, "UnityInternalsFixture.Clash", "Field", "clash").Status);
-            Assert.IsFalse(result.Entries.Any(e => e.Status == WrapStatus.NameCollision && e.Rule != "PathCollision")); // CaseTwin/Casetwin collide by file path only
+            Assert.IsFalse(result.Entries.Any(e => e.Status == WrapStatus.NameCollision && e.Rule != "PathCollision" && e.Id.Contains("|UnityInternalsFixture.ReservedNames|") == false)); // only CaseTwin/Casetwin (file path) and ReservedNames (wrapper-owned names) collide
         }
 
         [Test]
@@ -245,7 +247,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             CollectionAssert.Contains(paths, "WrappedUnityInternalsFixture/StaticApi.g.cs");
             CollectionAssert.Contains(paths, "WrappedUnityInternalsFixture/Lambdas.g.cs");
             CollectionAssert.DoesNotContain(paths, "WrappedUnityInternalsFixture/Nested.g.cs");
-            CollectionAssert.DoesNotContain(paths, "WrappedUnityInternalsFixture/Point.g.cs");
+            CollectionAssert.Contains(paths, "WrappedUnityInternalsFixture/Point.g.cs");
+            CollectionAssert.Contains(paths, "WrappedRuntime/WrapperRegistry.g.cs");
             CollectionAssert.DoesNotContain(paths, "WrappedUnityInternalsFixture/FixtureMarker.g.cs");
         }
 

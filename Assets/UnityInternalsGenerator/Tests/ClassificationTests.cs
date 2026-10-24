@@ -41,11 +41,34 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         [Test]
         public void Types_Deferred()
         {
+            AssertStatus(NewContext(), "Callback", WrapStatus.Deferred);
+        }
+
+        [Test]
+        public void Types_StructInterfaceAndInstanceClass_Wrapped()
+        {
             var ctx = NewContext();
-            foreach (var name in new[] { "Point", "IThing", "Callback" })
+            foreach (var name in new[] { "Point", "IThing", "Thing", "Branch", "Twig", "Leaf", "AbstractThing", "ReservedNames" })
             {
-                AssertStatus(ctx, name, WrapStatus.Deferred);
+                AssertStatus(ctx, name, WrapStatus.Wrapped);
+                Assert.IsTrue(ctx.IsInstanceWrapper(Fixture(name)), name);
             }
+
+            Assert.IsFalse(ctx.IsInstanceWrapper(Fixture("StaticApi")), "static class");
+            Assert.IsFalse(ctx.IsInstanceWrapper(Fixture("Mask")), "enum");
+        }
+
+        [Test]
+        public void WrapperBase_StopsAtFirstPublicBase()
+        {
+            var ctx = NewContext();
+            ctx.ClassifyAll();
+
+            Assert.AreEqual(Fixture("Twig"), ctx.WrapperBase(Fixture("Leaf")));
+            Assert.AreEqual(Fixture("Branch"), ctx.WrapperBase(Fixture("Twig")));
+            Assert.IsNull(ctx.WrapperBase(Fixture("Branch")));
+            Assert.AreEqual(Fixture("FixtureNode"), GenerationContext.PublicBase(Fixture("Branch")));
+            Assert.IsNull(GenerationContext.PublicBase(Fixture("Holder")));
         }
 
         [Test]
@@ -117,7 +140,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             CollectionAssert.AreEqual(names.OrderBy(n => n, StringComparer.Ordinal).ToList(), names);
             CollectionAssert.Contains(names, Fixture("StaticApi").FullName);
             CollectionAssert.Contains(names, Fixture("Color8").FullName);
-            CollectionAssert.DoesNotContain(names, Fixture("Point").FullName);
+            CollectionAssert.DoesNotContain(names, Fixture("Callback").FullName);
             CollectionAssert.DoesNotContain(names, typeof(FixtureMarker).FullName);
         }
 
@@ -165,11 +188,30 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
-        public void Convert_Holder_Deferred()
+        public void Convert_InstanceClass_WrapsAndUnwraps()
         {
             var c = NewContext().Convert(Fixture("Holder"));
-            Assert.AreEqual(WrapStatus.Deferred, c.Status);
-            StringAssert.Contains("WrapperConversion", c.Reason);
+            Assert.AreEqual(WrapStatus.Wrapped, c.Status);
+            Assert.AreEqual("global::WrappedUnityInternalsFixture.Holder", c.WrappedTypeRef);
+            Assert.AreEqual("global::WrappedUnityInternalsFixture.Holder.Wrap(x)", c.ToWrapped("x"));
+            Assert.AreEqual("(x)?.m_Value", c.ToUnity("x"));
+        }
+
+        [Test]
+        public void Convert_Struct_UnwrapsWithoutNullCheck()
+        {
+            var c = NewContext().Convert(Fixture("Point"));
+            Assert.AreEqual(WrapStatus.Wrapped, c.Status);
+            Assert.AreEqual("global::WrappedUnityInternalsFixture.Point.Wrap(x)", c.ToWrapped("x"));
+            Assert.AreEqual("(x).m_Value", c.ToUnity("x"));
+        }
+
+        [Test]
+        public void Convert_Interface_UsesWrapperClass()
+        {
+            var c = NewContext().Convert(Fixture("IThing"));
+            Assert.AreEqual(WrapStatus.Wrapped, c.Status);
+            Assert.AreEqual("global::WrappedUnityInternalsFixture.IThing", c.WrappedTypeRef);
         }
 
         [Test]
@@ -290,8 +332,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         [Test]
         public void Convert_NotWrapped_ToWrappedThrows()
         {
-            var c = NewContext().Convert(Fixture("Holder"));
+            var c = NewContext().Convert(Fixture("Callback"));
             Assert.Throws<InvalidOperationException>(() => c.ToWrapped("x"));
+            Assert.Throws<InvalidOperationException>(() => c.ToUnity("x"));
         }
     }
 }

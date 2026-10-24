@@ -16,6 +16,14 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
     {
         private const int c_TimeoutMilliseconds = 10 * 60 * 1000;
 
+        private readonly string m_OutputDirectory;
+
+        /// <summary>By default sources and the assembly go to a temp folder that is deleted again. With an output directory that folder is used and kept, so the produced DLL can be loaded.</summary>
+        public RoslynProcessCompiler(string outputDirectory = null)
+        {
+            m_OutputDirectory = outputDirectory;
+        }
+
         private static readonly Regex s_Located = new Regex(@"^(?<file>.+)\((?<line>\d+),\d+\): (?<sev>error|warning) (?<code>CS\d+): (?<msg>.*)$", RegexOptions.Compiled);
         private static readonly Regex s_Unlocated = new Regex(@"^(?:.*?: )?(?<sev>error|warning) (?<code>CS\d+): (?<msg>.*)$", RegexOptions.Compiled);
 
@@ -27,8 +35,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
             if (File.Exists(dotnet) == false) throw new FileNotFoundException("Unity bundled dotnet not found: " + dotnet);
             if (File.Exists(csc) == false) throw new FileNotFoundException("Unity bundled Roslyn csc.dll not found: " + csc);
 
+            var keep = string.IsNullOrEmpty(m_OutputDirectory) == false;
             var projectRoot = Directory.GetParent(Application.dataPath).FullName;
-            var dir = Path.Combine(projectRoot, "Temp", "UnityInternalsGenerator", Guid.NewGuid().ToString("N")).Replace('\\', '/');
+            var dir = (keep ? m_OutputDirectory : Path.Combine(projectRoot, "Temp", "UnityInternalsGenerator", Guid.NewGuid().ToString("N"))).Replace('\\', '/');
             try
             {
                 Directory.CreateDirectory(dir);
@@ -56,7 +65,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
             {
                 try
                 {
-                    if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                    if (keep == false && Directory.Exists(dir)) Directory.Delete(dir, true);
                 }
                 catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
                 {

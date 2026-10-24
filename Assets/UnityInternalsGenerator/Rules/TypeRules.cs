@@ -11,11 +11,14 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
 
     public static class TypeRules
     {
-        /// <summary>Evaluated in order after pre-checks (access, generics, nesting) pass. A match means the type is Wrapped.</summary>
+        /// <summary>Evaluated in order after pre-checks (access, generics, nesting, delegates) pass. A match means the type is Wrapped.</summary>
         public static IReadOnlyList<ITypeRule> CreateOrdered() => new ITypeRule[]
         {
             new EnumTypeRule(),
             new StaticClassTypeRule(),
+            new StructTypeRule(),
+            new InterfaceTypeRule(),
+            new InstanceClassTypeRule(),
         };
     }
 
@@ -50,7 +53,34 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
 
         public ITypeGenerator Generator { get; } = new ClassTypeGenerator();
 
-        public bool Match(Type t, GenerationContext ctx) => t.IsClass && typeof(Delegate).IsAssignableFrom(t) == false;
+        public bool Match(Type t, GenerationContext ctx) => t.IsClass && t.IsAbstract && t.IsSealed;
+    }
+
+    public sealed class StructTypeRule : ITypeRule
+    {
+        public string Name => "StructTypeRule";
+
+        public ITypeGenerator Generator { get; } = new WrapperTypeGenerator(WrapperKind.Struct);
+
+        public bool Match(Type t, GenerationContext ctx) => t.IsValueType;
+    }
+
+    public sealed class InterfaceTypeRule : ITypeRule
+    {
+        public string Name => "InterfaceTypeRule";
+
+        public ITypeGenerator Generator { get; } = new WrapperTypeGenerator(WrapperKind.Interface);
+
+        public bool Match(Type t, GenerationContext ctx) => t.IsInterface;
+    }
+
+    public sealed class InstanceClassTypeRule : ITypeRule
+    {
+        public string Name => "InstanceClassTypeRule";
+
+        public ITypeGenerator Generator { get; } = new WrapperTypeGenerator(WrapperKind.Class);
+
+        public bool Match(Type t, GenerationContext ctx) => t.IsClass;
     }
 
     /// <summary>Mirror enum: same underlying type, values and [Flags]. Values are always emitted whole and never reported.</summary>
@@ -73,41 +103,144 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         }
     }
 
-    /// <summary>
-    /// Static class → public static class; non-static class → public class with a private ctor and static members only.
-    /// Emitted members, then emitted nested types.
-    /// </summary>
+    /// <summary>Static class → public static class with forwarding static members, then emitted nested types.</summary>
     public sealed class ClassTypeGenerator : ITypeGenerator
     {
         public void Emit(Type t, CodeWriter w, GenerationContext ctx)
         {
+            var members = TypeBodies.EmittedMembers(t, ctx);
+
+            using (w.Block("public static class " + CSharpNames.TypeDeclName(t)))
+            {
+                foreach (var planned in members) TypeBodies.EmitMember(planned, w, ctx);
+                TypeBodies.EmitNested(t, w, ctx, members.Count > 0);
+            }
+        }
+    }
+
+    public enum WrapperKind
+    {
+        Class,
+        Struct,
+        Interface,
+    }
+
+    /// <summary>
+    /// Internal class, struct or interface → public wrapper holding the real value in the internal field <see cref="WrapperSyntax.ValueField"/>.
+    /// Class wrappers mirror the internal base chain up to the first public base (exposed as Target plus an implicit conversion);
+    /// Wrap turns null into null and, for classes, returns the most-derived registered wrapper.
+    /// </summary>
+    public sealed class WrapperTypeGenerator : ITypeGenerator
+    {
+        private readonly WrapperKind m_Kind;
+
+        public WrapperTypeGenerator(WrapperKind kind)
+        {
+            m_Kind = kind;
+        }
+
+        public void Emit(Type t, CodeWriter w, GenerationContext ctx)
+        {
             var name = CSharpNames.TypeDeclName(t);
-            var isStatic = t.IsAbstract && t.IsSealed;
-            var members = ctx.PlanFor(t).Where(p => ctx.IsEmitted(p.Member)).ToList();
+            var unity = CSharpNames.TypeRef(t);
+            var baseWrapper = m_Kind == WrapperKind.Class ? ctx.WrapperBase(t) : null;
+            var keyword = m_Kind == WrapperKind.Struct ? "struct " : "class ";
+            var header = "public " + keyword + name + (baseWrapper == null ? string.Empty : " : " + ctx.WrappedTypeRef(baseWrapper));
+
+            using (w.Block(header))
+            {
+                EmitShape(t, name, unity, baseWrapper, w);
+
+                foreach (var planned in TypeBodies.EmittedMembers(t, ctx))
+                {
+                    w.Line();
+                    TypeBodies.EmitMember(planned, w, ctx);
+                }
+                TypeBodies.EmitNested(t, w, ctx, true);
+            }
+        }
+
+        private void EmitShape(Type t, string name, string unity, Type baseWrapper, CodeWriter w)
+        {
+            var isStruct = m_Kind == WrapperKind.Struct;
+            var isRoot = baseWrapper == null;
+
+            w.Line("internal " + (isRoot ? string.Empty : "new ") + (isStruct ? string.Empty : "readonly ") + unity + " " + WrapperSyntax.ValueField + ";");
+            w.Line();
+            w.Line("internal " + name + "(" + unity + " value)" + (isRoot ? string.Empty : " : base(value)") + " { " + WrapperSyntax.ValueField + " = value; }");
+            w.Line();
+            w.Line("internal static " + name + " " + WrapperSyntax.WrapMethod + "(" + unity + " value) => " + WrapExpression(name) + ";");
+
+            if (isRoot == false) return;
+
+            var publicBase = m_Kind == WrapperKind.Class ? GenerationContext.PublicBase(t) : null;
+            if (publicBase != null)
+            {
+                var publicRef = CSharpNames.TypeRef(publicBase);
+                w.Line();
+                w.Line("public " + publicRef + " " + WrapperSyntax.TargetProperty + " => " + WrapperSyntax.ValueField + ";");
+                w.Line();
+                w.Line("public static implicit operator " + publicRef + "(" + name + " wrapper) => wrapper?." + WrapperSyntax.ValueField + ";");
+            }
+
+            w.Line();
+            w.Line("public override bool Equals(object obj) => obj is " + name + " other && " + SameValue("other") + ";");
+            w.Line();
+            w.Line("public override int GetHashCode() => " + WrapperSyntax.ValueField + ".GetHashCode();");
+            w.Line();
+            w.Line("public static bool operator ==(" + name + " left, " + name + " right) => " + EqualityExpression() + ";");
+            w.Line();
+            w.Line("public static bool operator !=(" + name + " left, " + name + " right) => (left == right) == false;");
+        }
+
+        private string WrapExpression(string name)
+        {
+            switch (m_Kind)
+            {
+                case WrapperKind.Struct: return "new " + name + "(value)";
+
+                // A public class between two internal ones makes the lower wrapper a root, so the registry can hand back a wrapper that is not a T.
+                case WrapperKind.Class: return "value == null ? null : " + WrapperSyntax.RegistryRef + "." + WrapperSyntax.WrapMethod + "(value) as " + name + " ?? new " + name + "(value)";
+                default: return "value == null ? null : new " + name + "(value)";
+            }
+        }
+
+        private string SameValue(string other) =>
+            m_Kind == WrapperKind.Struct
+                ? WrapperSyntax.ValueField + ".Equals(" + other + "." + WrapperSyntax.ValueField + ")"
+                : "global::System.Object.ReferenceEquals(" + WrapperSyntax.ValueField + ", " + other + "." + WrapperSyntax.ValueField + ")";
+
+        private string EqualityExpression() =>
+            m_Kind == WrapperKind.Struct
+                ? "left." + WrapperSyntax.ValueField + ".Equals(right." + WrapperSyntax.ValueField + ")"
+                : "global::System.Object.ReferenceEquals(left, null) ? global::System.Object.ReferenceEquals(right, null) : left.Equals(right)";
+    }
+
+    /// <summary>Emission shared by the type generators: emitted members in plan order, then emitted nested types.</summary>
+    internal static class TypeBodies
+    {
+        public static IReadOnlyList<PlannedMember> EmittedMembers(Type t, GenerationContext ctx) => ctx.PlanFor(t).Where(p => ctx.IsEmitted(p.Member)).ToList();
+
+        public static void EmitMember(PlannedMember planned, CodeWriter w, GenerationContext ctx)
+        {
+            using (w.Member(MemberId.Member(planned.Member)))
+            {
+                planned.Rule.Emit(planned.Member, w, ctx);
+            }
+        }
+
+        public static void EmitNested(Type t, CodeWriter w, GenerationContext ctx, bool wroteAny)
+        {
             var nested = t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
-                .Where(n => ctx.IsEmitted(n))
+                .Where(ctx.IsEmitted)
                 .OrderBy(n => n.FullName, StringComparer.Ordinal)
                 .ToList();
 
-            using (w.Block("public " + (isStatic ? "static " : string.Empty) + "class " + name))
+            foreach (var n in nested)
             {
-                if (isStatic == false) w.Line("private " + name + "() { }");
-
-                foreach (var planned in members)
-                {
-                    using (w.Member(MemberId.Member(planned.Member)))
-                    {
-                        planned.Rule.Emit(planned.Member, w, ctx);
-                    }
-                }
-
-                var wroteAny = isStatic == false || members.Count > 0;
-                foreach (var n in nested)
-                {
-                    if (wroteAny) w.Line();
-                    TypeEmission.Emit(n, w, ctx);
-                    wroteAny = true;
-                }
+                if (wroteAny) w.Line();
+                TypeEmission.Emit(n, w, ctx);
+                wroteAny = true;
             }
         }
     }
