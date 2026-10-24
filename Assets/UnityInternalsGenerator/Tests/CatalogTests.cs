@@ -2,6 +2,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 {
     using System;
     using System.Linq;
+    using System.Reflection;
     using DandaUtils.Editor.UnityInternalsGenerator.Model;
     using DandaUtils.Editor.UnityInternalsGenerator.Naming;
     using DandaUtils.Editor.UnityInternalsGenerator.Selection;
@@ -11,6 +12,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
     public sealed class CatalogTests
     {
         private const string c_Host = "Wrapped.Fixture.Host";
+        private const BindingFlags c_Declared = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
         private static readonly Type s_Marker = typeof(FixtureMarker);
 
@@ -22,7 +24,12 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
         private static Type Fixture(string name) => s_Marker.Assembly.GetType("UnityInternalsFixture." + name, true);
 
-        private static string MethodId(string type, string name) => MemberId.Member(Fixture(type).GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public).First(m => m.Name == name));
+        private static string MethodId(string type, string name) => MemberId.Member(Fixture(type).GetMethods(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public).First(m => m.Name == name));
+
+        /// <summary>The Branch constructor and the Grid indexer that take a wrapped <c>Point</c>.</summary>
+        private static string PointCtorId() => MemberId.Member(Fixture("Branch").GetConstructor(c_Declared, null, new[] { Fixture("Point") }, null));
+
+        private static string PointIndexerId() => MemberId.Member(Fixture("Grid").GetProperties(c_Declared).Single(p => p.GetIndexParameters().Any(i => i.ParameterType == Fixture("Point"))));
 
         private static Catalog Build() => CatalogBuilder.Build(NewContext());
 
@@ -89,6 +96,61 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void TypeKinds_StructAndInterface()
+        {
+            var catalog = Build();
+            Assert.AreEqual(NodeKind.Struct, catalog.Get(MemberId.Type(Fixture("Point"))).Kind);
+            Assert.AreEqual(NodeKind.Interface, catalog.Get(MemberId.Type(Fixture("IThing"))).Kind);
+            Assert.AreEqual(NodeKind.Class, catalog.Get(MemberId.Type(Fixture("Branch"))).Kind);
+        }
+
+        [Test]
+        public void MemberKinds_ConstructorAndIndexer()
+        {
+            var children = Build().ChildrenOf(MemberId.Type(Fixture("Branch")));
+            Assert.AreEqual(NodeKind.Indexer, children.First(n => n.Name == "Item").Kind);
+            Assert.IsTrue(children.Where(n => n.Name == ".ctor").All(n => n.Kind == NodeKind.Constructor));
+            Assert.AreEqual(3, children.Count(n => n.Name == ".ctor"));
+        }
+
+        [Test]
+        public void Member_Dependencies_ConstructorAndIndexerSignatures()
+        {
+            var catalog = Build();
+            var point = MemberId.Type(Fixture("Point"));
+
+            CollectionAssert.Contains(catalog.Get(PointCtorId()).DependencyTypeIds, point);    // constructor parameter
+            CollectionAssert.Contains(catalog.Get(PointIndexerId()).DependencyTypeIds, point); // index parameter
+        }
+
+        [Test]
+        public void Member_TwoIndexersOnOneType_AreSeparateNodesWithTheirOwnDependencies()
+        {
+            var catalog = Build();
+            var grid = Fixture("Grid");
+            var byPoint = catalog.Get(PointIndexerId());
+            var byInt = catalog.Get(MemberId.Member(grid.GetProperties(c_Declared).Single(p => p.GetIndexParameters()[0].ParameterType == typeof(int))));
+
+            Assert.IsNotNull(byPoint, "indexer taking a Point");
+            Assert.IsNotNull(byInt, "indexer taking an int");
+            Assert.AreNotEqual(byPoint.Id, byInt.Id);
+            CollectionAssert.AreEquivalent(new[] { MemberId.Type(Fixture("Point")) }, byPoint.DependencyTypeIds);
+            Assert.AreEqual(0, byInt.DependencyTypeIds.Count);
+            Assert.AreEqual(2, catalog.ChildrenOf(MemberId.Type(grid)).Count(n => n.Kind == NodeKind.Indexer));
+        }
+
+        [Test]
+        public void Member_Dependencies_FieldAndMethodSignatures()
+        {
+            var catalog = Build();
+            var corner = catalog.ChildrenOf(MemberId.Type(Fixture("Branch"))).First(n => n.Name == "Corner");
+            CollectionAssert.Contains(corner.DependencyTypeIds, MemberId.Type(Fixture("Point"))); // field of a wrapped struct type
+
+            var shift = catalog.Get(MethodId("StaticApi", "Shift"));
+            CollectionAssert.AreEquivalent(new[] { MemberId.Type(Fixture("Point")) }, shift.DependencyTypeIds);
+        }
+
+        [Test]
         public void Member_Dependencies_ListWrappedTypes()
         {
             var next = Build().Get(MethodId("StaticApi", "Next"));
@@ -100,10 +162,10 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         public void NonWrappedTypes_HaveNoMembers()
         {
             var catalog = Build();
-            var point = catalog.Get(MemberId.Type(Fixture("Point")));
-            Assert.AreEqual(WrapStatus.Deferred, point.Status);
-            Assert.AreEqual(NodeKind.Other, point.Kind);
-            Assert.AreEqual(0, catalog.ChildrenOf(point.Id).Count);
+            var callback = catalog.Get(MemberId.Type(Fixture("Callback")));
+            Assert.AreEqual(WrapStatus.Deferred, callback.Status);
+            Assert.AreEqual(NodeKind.Other, callback.Kind);
+            Assert.AreEqual(0, catalog.ChildrenOf(callback.Id).Count);
             Assert.AreEqual(0, catalog.ChildrenOf(MemberId.Type(Fixture("Color8"))).Count);
         }
 

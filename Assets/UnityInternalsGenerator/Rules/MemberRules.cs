@@ -16,7 +16,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         {
             new ConstMemberRule(),
             new FieldMemberRule(),
+            new IndexerMemberRule(),
             new PropertyMemberRule(),
+            new ConstructorMemberRule(),
             new MethodMemberRule(),
         };
     }
@@ -34,7 +36,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             if (MemberSyntax.TryFormatConst(f, conversion, out var literal) == false) throw new InvalidOperationException("Const value not formattable: " + MemberId.Member(f));
 
             MemberSyntax.Attributes(f, w);
-            w.Line("public const " + conversion.WrappedTypeRef + " " + MemberSyntax.WrappedName(f, ctx) + " = " + literal + ";");
+            w.Line(MemberSyntax.PublicNew(f, ctx) + "const " + conversion.WrappedTypeRef + " " + MemberSyntax.WrappedName(f, ctx) + " = " + literal + ";");
         }
     }
 
@@ -49,7 +51,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             var f = (FieldInfo)m;
             var conversion = ctx.Convert(f.FieldType);
             var source = MemberSyntax.SourceRef(f);
-            var head = "public static " + conversion.WrappedTypeRef + " " + MemberSyntax.WrappedName(f, ctx);
+            var head = MemberSyntax.Modifiers(f, ctx) + conversion.WrappedTypeRef + " " + MemberSyntax.WrappedName(f, ctx);
 
             MemberSyntax.Attributes(f, w);
             w.Line(f.IsInitOnly
@@ -69,20 +71,50 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             var p = (PropertyInfo)m;
             var conversion = ctx.Convert(p.PropertyType);
             var source = MemberSyntax.SourceRef(p);
-            var head = "public static " + conversion.WrappedTypeRef + " " + MemberSyntax.WrappedName(p, ctx);
-            var getter = IsUsable(p.GetGetMethod(true), ctx) ? "get => " + conversion.ToWrapped(source) + ";" : null;
-            var setter = IsUsable(p.GetSetMethod(true), ctx) ? "set => " + source + " = " + conversion.ToUnity("value") + ";" : null;
+            var head = MemberSyntax.Modifiers(p, ctx) + conversion.WrappedTypeRef + " " + MemberSyntax.WrappedName(p, ctx);
 
             MemberSyntax.Attributes(p, w);
-            if (getter != null && setter == null)
-            {
-                w.Line(head + " => " + conversion.ToWrapped(source) + ";");
-                return;
-            }
-            w.Line(head + " { " + string.Join(" ", new[] { getter, setter }.Where(s => s != null)) + " }");
+            MemberSyntax.Accessors(p, conversion, source, head, w, ctx);
         }
+    }
 
-        private static bool IsUsable(MethodInfo accessor, GenerationContext ctx) => accessor != null && ctx.IsAccessible(accessor);
+    /// <summary>Indexer: the wrapper indexes the value field (or the Unity type) with the converted arguments.</summary>
+    public sealed class IndexerMemberRule : IMemberRule
+    {
+        public string Name => "Indexer";
+
+        public bool Match(MemberInfo m, GenerationContext ctx) => m is PropertyInfo p && p.GetIndexParameters().Length > 0;
+
+        public void Emit(MemberInfo m, CodeWriter w, GenerationContext ctx)
+        {
+            var p = (PropertyInfo)m;
+            var conversion = ctx.Convert(p.PropertyType);
+            var parameters = MemberSyntax.Parameters(p.GetIndexParameters(), ctx, out _);
+            var source = MemberSyntax.Owner(p) + "[" + string.Join(", ", parameters.Select(x => x.Argument)) + "]";
+            var head = MemberSyntax.Modifiers(p, ctx) + conversion.WrappedTypeRef + " this[" + string.Join(", ", parameters.Select(x => x.Declaration)) + "]";
+
+            MemberSyntax.Attributes(p, w);
+            MemberSyntax.Accessors(p, conversion, source, head, w, ctx);
+        }
+    }
+
+    /// <summary>Constructor: builds the real Unity value and hands it to the wrapper's internal constructor.</summary>
+    public sealed class ConstructorMemberRule : IMemberRule
+    {
+        public string Name => "Constructor";
+
+        public bool Match(MemberInfo m, GenerationContext ctx) => m is ConstructorInfo c && c.IsStatic == false;
+
+        public void Emit(MemberInfo m, CodeWriter w, GenerationContext ctx)
+        {
+            var c = (ConstructorInfo)m;
+            var parameters = MemberSyntax.Parameters(c.GetParameters(), ctx, out _);
+            var declaration = string.Join(", ", parameters.Select(p => p.Declaration));
+            var arguments = string.Join(", ", parameters.Select(p => p.Argument));
+
+            MemberSyntax.Attributes(c, w);
+            w.Line("public " + CSharpNames.TypeDeclName(c.DeclaringType) + "(" + declaration + ") : this(new " + CSharpNames.TypeRef(c.DeclaringType) + "(" + arguments + ")) { }");
+        }
     }
 
     public sealed class MethodMemberRule : IMemberRule
@@ -95,12 +127,12 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         {
             var method = (MethodInfo)m;
             var returns = ctx.Convert(method.ReturnType);
-            var parameters = MemberSyntax.Parameters(method, ctx, out _);
+            var parameters = MemberSyntax.Parameters(method.GetParameters(), ctx, out _);
             var declaration = string.Join(", ", parameters.Select(p => p.Declaration));
             var call = MemberSyntax.SourceRef(method) + "(" + string.Join(", ", parameters.Select(p => p.Argument)) + ")";
 
             MemberSyntax.Attributes(method, w);
-            w.Line("public static " + returns.WrappedTypeRef + " " + MemberSyntax.WrappedName(method, ctx) + "(" + declaration + ") => " + returns.ToWrapped(call) + ";");
+            w.Line(MemberSyntax.Modifiers(method, ctx) + returns.WrappedTypeRef + " " + MemberSyntax.WrappedName(method, ctx) + "(" + declaration + ") => " + returns.ToWrapped(call) + ";");
         }
     }
 
@@ -122,9 +154,59 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
     /// <summary>C# fragments shared by member rules and <see cref="MemberPlanner"/>. Parameter helpers assume every conversion is Wrapped.</summary>
     public static class MemberSyntax
     {
-        public static string SourceRef(MemberInfo m) => CSharpNames.TypeRef(m.DeclaringType) + "." + CSharpNames.Identifier(m.Name);
+        /// <summary>What the member is read through: the Unity type for static members, the wrapper's value field for instance members.</summary>
+        public static string Owner(MemberInfo m) => IsStatic(m) ? CSharpNames.TypeRef(m.DeclaringType) : WrapperSyntax.ValueField;
 
-        public static string WrappedName(MemberInfo m, GenerationContext ctx) => CSharpNames.Identifier(ctx.Naming.MemberName(m.Name));
+        public static string SourceRef(MemberInfo m) => Owner(m) + "." + CSharpNames.Identifier(m.Name);
+
+        /// <summary>Emitted name: the naming strategy's, except constructors (the wrapper type name) and indexers ("this").</summary>
+        public static string WrappedName(MemberInfo m, GenerationContext ctx)
+        {
+            if (m is ConstructorInfo) return CSharpNames.TypeDeclName(m.DeclaringType);
+            if (m is PropertyInfo p && p.GetIndexParameters().Length > 0) return "this";
+            return CSharpNames.Identifier(ctx.Naming.MemberName(m.Name));
+        }
+
+        /// <summary>"public ", plus "new " when the member hides one an emitted wrapper base declares.</summary>
+        public static string PublicNew(MemberInfo m, GenerationContext ctx) => "public " + (ctx.HidesWrapperBaseMember(m) ? "new " : string.Empty);
+
+        public static string Modifiers(MemberInfo m, GenerationContext ctx) => PublicNew(m, ctx) + (IsStatic(m) ? "static " : string.Empty);
+
+        public static bool IsStatic(MemberInfo m)
+        {
+            switch (m)
+            {
+                case FieldInfo f: return f.IsStatic;
+                case PropertyInfo p: return p.GetAccessors(true).Any(a => a.IsStatic);
+                case EventInfo e: return e.GetAddMethod(true)?.IsStatic == true;
+                case MethodBase method: return method.IsStatic;
+                default: return false;
+            }
+        }
+
+        /// <summary>Emitted parameter-type signature, used for hiding and collision checks; null for members that cannot be overloaded.</summary>
+        public static string Signature(MemberInfo m, GenerationContext ctx)
+        {
+            if (m is MethodBase method) return "(" + string.Join(", ", Parameters(method.GetParameters(), ctx, out _).Select(p => p.SignatureType)) + ")";
+            if (m is PropertyInfo p && p.GetIndexParameters().Length > 0) return "[" + string.Join(", ", Parameters(p.GetIndexParameters(), ctx, out _).Select(x => x.SignatureType)) + "]";
+            return null;
+        }
+
+        /// <summary>Writes a get/set pair, or an expression body when there is only a getter.</summary>
+        public static void Accessors(PropertyInfo p, Conversion conversion, string source, string head, CodeWriter w, GenerationContext ctx)
+        {
+            var getter = IsUsable(p.GetGetMethod(true), ctx) ? "get => " + conversion.ToWrapped(source) + ";" : null;
+            var setter = IsUsable(p.GetSetMethod(true), ctx) ? "set => " + source + " = " + conversion.ToUnity("value") + ";" : null;
+
+            if (getter != null && setter == null)
+            {
+                w.Line(head + " => " + conversion.ToWrapped(source) + ";");
+                return;
+            }
+            w.Line(head + " { " + string.Join(" ", new[] { getter, setter }.Where(s => s != null)) + " }");
+        }
+
+        private static bool IsUsable(MethodInfo accessor, GenerationContext ctx) => accessor != null && ctx.IsAccessible(accessor);
 
         /// <summary>Copies a non-error [Obsolete]; error-obsolete members never reach emission.</summary>
         public static void Attributes(MemberInfo m, CodeWriter w)
@@ -149,9 +231,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         /// Defaults that cannot be formatted are dropped, together with every default before them
         /// (C# requires optional parameters to trail); <paramref name="droppedDefault"/> reports it.
         /// </summary>
-        public static IReadOnlyList<WrappedParameter> Parameters(MethodInfo m, GenerationContext ctx, out bool droppedDefault)
+        public static IReadOnlyList<WrappedParameter> Parameters(ParameterInfo[] ps, GenerationContext ctx, out bool droppedDefault)
         {
-            var ps = m.GetParameters();
             var literals = new string[ps.Length];
             var isParams = new bool[ps.Length];
             var conversions = new Conversion[ps.Length];

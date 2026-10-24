@@ -132,6 +132,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Selection
         private static NodeKind TypeKind(Type t)
         {
             if (t.IsEnum) return NodeKind.Enum;
+            if (t.IsValueType) return NodeKind.Struct;
+            if (t.IsInterface) return NodeKind.Interface;
             if (t.IsClass == false || typeof(Delegate).IsAssignableFrom(t)) return NodeKind.Other;
             return t.IsAbstract && t.IsSealed ? NodeKind.StaticClass : NodeKind.Class;
         }
@@ -147,7 +149,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Selection
             switch (m)
             {
                 case MethodInfo _: return NodeKind.Method;
-                case PropertyInfo _: return NodeKind.Property;
+                case ConstructorInfo _: return NodeKind.Constructor;
+                case PropertyInfo p: return p.GetIndexParameters().Length > 0 ? NodeKind.Indexer : NodeKind.Property;
                 case FieldInfo f: return f.IsLiteral ? NodeKind.Const : NodeKind.Field;
                 default: return NodeKind.Other;
             }
@@ -162,8 +165,12 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Selection
                     signature.Add(method.ReturnType);
                     signature.AddRange(method.GetParameters().Select(p => p.ParameterType));
                     break;
+                case ConstructorInfo ctor:
+                    signature.AddRange(ctor.GetParameters().Select(p => p.ParameterType));
+                    break;
                 case PropertyInfo property:
                     signature.Add(property.PropertyType);
+                    signature.AddRange(property.GetIndexParameters().Select(p => p.ParameterType));
                     break;
                 case FieldInfo field:
                     signature.Add(field.FieldType);

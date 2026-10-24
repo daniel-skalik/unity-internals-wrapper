@@ -16,6 +16,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             {
                 case ConstructorInfo c: return Compose(declaring, "Ctor", c.Name + Params(c));
                 case MethodInfo method: return Compose(declaring, "Method", GenericName(method) + Params(method));
+                // Every indexer of a type shares one member name, so its index parameters are part of the id.
+                case PropertyInfo p when p.GetIndexParameters().Length > 0: return Compose(declaring, "Property", p.Name + Params(p.GetIndexParameters()));
                 case PropertyInfo _: return Compose(declaring, "Property", m.Name);
                 case FieldInfo f: return Compose(declaring, f.IsLiteral ? "Const" : "Field", m.Name);
                 case EventInfo _: return Compose(declaring, "Event", m.Name);
@@ -41,9 +43,10 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
 
         private static string GenericName(MethodInfo m) => m.IsGenericMethodDefinition ? m.Name + "``" + m.GetGenericArguments().Length.ToString(CultureInfo.InvariantCulture) : m.Name;
 
-        private static string Params(MethodBase m)
+        private static string Params(MethodBase m) => Params(m.GetParameters());
+
+        private static string Params(ParameterInfo[] ps)
         {
-            var ps = m.GetParameters();
             var names = new string[ps.Length];
             for (var i = 0; i < ps.Length; i++) names[i] = Render(ps[i].ParameterType);
             return "(" + string.Join(",", names) + ")";

@@ -107,7 +107,6 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             if (IsCompilerGenerated(m)) return Verdict.Of(WrapStatus.Excluded, "CompilerGenerated");
             if (m is ConstructorInfo c && c.IsStatic) return Verdict.Of(WrapStatus.Excluded, "StaticConstructor");
             if (IsAccessible(m, ctx) == false) return Verdict.Of(WrapStatus.NotAccessible, "Private or protected member");
-            if (IsStatic(m) == false) return Verdict.Of(WrapStatus.Deferred, "InstanceMembers (step 2)");
             if (m.GetCustomAttribute<ObsoleteAttribute>(false)?.IsError == true) return Verdict.Of(WrapStatus.Excluded, "ObsoleteError");
             if (m is EventInfo) return Verdict.Of(WrapStatus.Deferred, "Event (step 3)");
             if (rule == null) return Verdict.Of(WrapStatus.Unsupported, "No member rule matched");
@@ -115,7 +114,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             switch (m)
             {
                 case MethodInfo method: return CheckMethod(method, ctx);
-                case PropertyInfo property: return property.GetIndexParameters().Length > 0 ? Verdict.Of(WrapStatus.Deferred, "Indexer (step 2)") : FromConversion(ctx.Convert(property.PropertyType));
+                case ConstructorInfo ctor: return CheckConstructor(ctor, ctx);
+                case PropertyInfo property: return property.GetIndexParameters().Length > 0 ? CheckIndexer(property, ctx) : FromConversion(ctx.Convert(property.PropertyType));
                 case FieldInfo field: return CheckField(field, ctx);
                 default: return Verdict.Of(WrapStatus.Unsupported, "Unsupported member kind");
             }
@@ -125,17 +125,41 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         {
             if (m.IsSpecialName) return m.Name.StartsWith("op_", StringComparison.Ordinal) ? Verdict.Of(WrapStatus.Deferred, "Operator (step 3)") : Verdict.Of(WrapStatus.Unsupported, "SpecialName");
             if (m.IsGenericMethodDefinition) return Verdict.Of(WrapStatus.Deferred, "GenericMethod (step 3)");
-            if ((m.CallingConvention & CallingConventions.VarArgs) != 0) return Verdict.Of(WrapStatus.Unsupported, "VarArgs");
+            if (IsVarArgs(m)) return Verdict.Of(WrapStatus.Unsupported, "VarArgs");
 
             var returns = ctx.Convert(m.ReturnType);
             if (returns.Status != WrapStatus.Wrapped) return FromConversion(returns);
-            foreach (var p in m.GetParameters())
+            return CheckParameters(m.GetParameters(), ctx);
+        }
+
+        /// <summary>The wrapper calls the real constructor, so an abstract type cannot offer one until the inheritable proxies of step 6.</summary>
+        private static Verdict CheckConstructor(ConstructorInfo c, GenerationContext ctx)
+        {
+            var t = c.DeclaringType;
+            if (t.IsAbstract) return Verdict.Of(WrapStatus.Deferred, "Inheritable (step 6)");
+            if (t.IsValueType && c.GetParameters().Length == 0) return Verdict.Of(WrapStatus.Unsupported, "Parameterless struct constructor");
+            if (IsVarArgs(c)) return Verdict.Of(WrapStatus.Unsupported, "VarArgs");
+            return CheckParameters(c.GetParameters(), ctx);
+        }
+
+        private static Verdict CheckIndexer(PropertyInfo p, GenerationContext ctx)
+        {
+            var value = ctx.Convert(p.PropertyType);
+            if (value.Status != WrapStatus.Wrapped) return FromConversion(value);
+            return CheckParameters(p.GetIndexParameters(), ctx);
+        }
+
+        private static bool IsVarArgs(MethodBase m) => (m.CallingConvention & CallingConventions.VarArgs) != 0;
+
+        private static Verdict CheckParameters(ParameterInfo[] ps, GenerationContext ctx)
+        {
+            foreach (var p in ps)
             {
                 var conversion = ctx.Convert(p.ParameterType);
                 if (conversion.Status != WrapStatus.Wrapped) return FromConversion(conversion);
             }
 
-            MemberSyntax.Parameters(m, ctx, out var droppedDefault);
+            MemberSyntax.Parameters(ps, ctx, out var droppedDefault);
             return Verdict.Of(WrapStatus.Wrapped, droppedDefault ? "default dropped" : null);
         }
 
@@ -150,16 +174,32 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         private static Verdict FromConversion(Conversion c) => Verdict.Of(c.Status, c.Reason);
 
         // Same final name: non-methods (and nested wrapped types, and the enclosing type name) collide with everything; methods only with identical parameter types.
+        // Constructors and indexers carry no member name, so only an identical emitted signature collides. On an instance wrapper the names
+        // the wrapper declares itself are reserved (WrapperSyntax.ReservedNames).
         private static void MarkCollisions(Type t, List<Candidate> candidates, GenerationContext ctx)
         {
             var typeName = CSharpNames.TypeDeclName(t);
             var nestedNames = new HashSet<string>(t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).Where(ctx.IsWrappedType).Select(CSharpNames.TypeDeclName), StringComparer.Ordinal);
-            var groups = candidates.Where(c => c.Verdict.Status == WrapStatus.Wrapped).GroupBy(c => MemberSyntax.WrappedName(c.Member, ctx), StringComparer.Ordinal);
+            var isInstanceWrapper = ctx.IsInstanceWrapper(t);
+            var declaresTarget = ctx.DeclaresTarget(t);
+            var wrapped = candidates.Where(c => c.Verdict.Status == WrapStatus.Wrapped).ToList();
 
-            foreach (var group in groups)
+            foreach (var group in wrapped.Where(c => HasOwnName(c.Member) == false)
+                         .GroupBy(c => MemberSyntax.WrappedName(c.Member, ctx) + MemberSyntax.Signature(c.Member, ctx), StringComparer.Ordinal)
+                         .Where(g => g.Count() > 1))
+            {
+                Collide(group.ToList(), "Duplicate signature '" + group.Key + "'");
+            }
+
+            foreach (var group in wrapped.Where(c => HasOwnName(c.Member)).GroupBy(c => MemberSyntax.WrappedName(c.Member, ctx), StringComparer.Ordinal))
             {
                 var name = group.Key;
                 var members = group.ToList();
+                if (isInstanceWrapper && WrapperSyntax.IsReserved(name, declaresTarget))
+                {
+                    Collide(members, "Name reserved by the wrapper '" + name + "'");
+                    continue;
+                }
                 if (name == typeName)
                 {
                     Collide(members, "Name equals enclosing type '" + name + "'");
@@ -176,19 +216,24 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
                     Collide(members, "Duplicate name '" + name + "'");
                     continue;
                 }
-                foreach (var overload in members.GroupBy(c => MethodSignature((MethodInfo)c.Member, ctx), StringComparer.Ordinal).Where(g => g.Count() > 1))
+                foreach (var overload in members.GroupBy(c => MemberSyntax.Signature(c.Member, ctx), StringComparer.Ordinal).Where(g => g.Count() > 1))
                 {
                     Collide(overload.ToList(), "Duplicate signature '" + name + overload.Key + "'");
                 }
             }
         }
 
+        /// <summary>False for constructors and indexers: their declaration carries no member name.</summary>
+        private static bool HasOwnName(MemberInfo m)
+        {
+            if (m is ConstructorInfo) return false;
+            return (m is PropertyInfo p && p.GetIndexParameters().Length > 0) == false;
+        }
+
         private static void Collide(List<Candidate> members, string reason)
         {
             foreach (var c in members) c.Verdict = Verdict.Of(WrapStatus.NameCollision, reason);
         }
-
-        private static string MethodSignature(MethodInfo m, GenerationContext ctx) => "(" + string.Join(", ", MemberSyntax.Parameters(m, ctx, out _).Select(p => p.SignatureType)) + ")";
 
         private static bool IsAccessible(MemberInfo m, GenerationContext ctx)
         {
@@ -202,18 +247,6 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             }
         }
 
-        private static bool IsStatic(MemberInfo m)
-        {
-            switch (m)
-            {
-                case FieldInfo f: return f.IsStatic;
-                case PropertyInfo p: return p.GetAccessors(true).Any(a => a.IsStatic);
-                case EventInfo e: return e.GetAddMethod(true)?.IsStatic == true;
-                case MethodBase method: return method.IsStatic;
-                default: return false;
-            }
-        }
-
         private static bool IsCompilerGenerated(MemberInfo m) => m.Name.IndexOf('<') >= 0 || m.GetCustomAttributesData().Any(a => a.AttributeType.FullName == c_CompilerGeneratedAttribute);
 
         private static string KindName(MemberInfo m)
@@ -222,6 +255,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             {
                 case ConstructorInfo _: return "Constructor";
                 case EventInfo _: return "Event";
+                case PropertyInfo p when p.GetIndexParameters().Length > 0: return "Indexer";
                 default: return m.MemberType.ToString();
             }
         }

@@ -13,6 +13,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
     public sealed class GenerationContext
     {
         private const string c_CompilerGeneratedAttribute = "System.Runtime.CompilerServices.CompilerGeneratedAttribute";
+        private const string c_IsByRefLikeAttribute = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
 
         private readonly GenerationInput m_Input;
         private readonly HashSet<Assembly> m_Sources;
@@ -24,6 +25,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         private readonly Dictionary<Type, MemberPlan> m_Plans = new Dictionary<Type, MemberPlan>();
         private readonly Dictionary<Type, Conversion> m_Conversions = new Dictionary<Type, Conversion>();
         private readonly Dictionary<Assembly, bool> m_Grants = new Dictionary<Assembly, bool>();
+        private readonly Dictionary<Type, HashSet<string>> m_EmittedShapes = new Dictionary<Type, HashSet<string>>();
         private readonly List<ReportEntry> m_Entries = new List<ReportEntry>();
         private readonly Func<Type, string> m_WrappedTypeMap;
         private HashSet<string> m_EmittedTypeIds;
@@ -55,6 +57,74 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         public bool IsSourceType(Type t) => m_Sources.Contains(t.Assembly);
 
         public bool IsWrappedType(Type t) => IsClassifiable(t) && Classify(t).Status == WrapStatus.Wrapped;
+
+        /// <summary>True when the type's wrapper holds a Unity value: class, struct and interface wrappers, not enums and not static classes.</summary>
+        public bool IsInstanceWrapper(Type t) => IsWrappedType(t) && t.IsEnum == false && IsStaticClass(t) == false;
+
+        /// <summary>
+        /// The wrapper the wrapper of <paramref name="t"/> derives from: the nearest internal base emitted as an instance wrapper.
+        /// Null when a public base comes first (then the wrapper is a root, see <see cref="PublicBase"/>) or when there is no base at all.
+        /// </summary>
+        public Type WrapperBase(Type t)
+        {
+            if (t == null || t.IsClass == false) return null;
+
+            for (var b = t.BaseType; b != null; b = b.BaseType)
+            {
+                if (b.IsVisible) return null;
+                if (IsEmitted(b) && IsInstanceWrapper(b)) return b;
+            }
+            return null;
+        }
+
+        /// <summary>First public base of the type, or null when that is <see cref="object"/> (a user-defined conversion to a base class is illegal) or there is none.</summary>
+        public static Type PublicBase(Type t)
+        {
+            for (var b = t.BaseType; b != null; b = b.BaseType)
+            {
+                if (b.IsVisible) return b == typeof(object) ? null : b;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// True when the type's wrapper declares <see cref="Rules.WrapperSyntax.TargetProperty"/>, or inherits it from the wrapper it derives from:
+        /// only a class wrapper does, and only when a public base other than <see cref="object"/> comes up its base chain.
+        /// </summary>
+        public bool DeclaresTarget(Type t) => t != null && t.IsClass && PublicBase(t) != null;
+
+        /// <summary>True when the member's emitted shape repeats a name (and, where overloadable, a signature) an emitted wrapper base already declares, so it needs <c>new</c>.</summary>
+        public bool HidesWrapperBaseMember(MemberInfo m)
+        {
+            var declaring = m.DeclaringType;
+            if (declaring == null) return false;
+
+            var shape = EmittedShape(m);
+            for (var b = WrapperBase(declaring); b != null; b = WrapperBase(b))
+            {
+                if (EmittedShapes(b).Contains(shape)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Memoized emitted shapes of one wrapper's own members; building them walks the whole parameter pipeline, so it happens once per type.</summary>
+        private HashSet<string> EmittedShapes(Type t)
+        {
+            if (m_EmittedShapes.TryGetValue(t, out var cached)) return cached;
+
+            var shapes = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var planned in PlanFor(t))
+            {
+                if (IsEmitted(planned.Member)) shapes.Add(EmittedShape(planned.Member));
+            }
+            m_EmittedShapes[t] = shapes;
+            return shapes;
+        }
+
+        /// <summary>Emitted name plus, where overloadable, the emitted parameter-type signature. Two members with the same shape cannot coexist on one type.</summary>
+        private string EmittedShape(MemberInfo m) => MemberSyntax.WrappedName(m, this) + MemberSyntax.Signature(m, this);
+
+        private static bool IsStaticClass(Type t) => t.IsClass && t.IsAbstract && t.IsSealed;
 
         /// <summary>True when the compile loop auto-excluded this exact type or member id after a compile failure.</summary>
         public bool IsAutoExcludedId(string id) => m_AutoExcludedIds.Contains(id);
@@ -171,14 +241,15 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
                 var declaringStatus = Classify(declaring).Status;
                 if (declaringStatus == WrapStatus.Excluded || declaringStatus == WrapStatus.NotAccessible) return new TypeClassification(declaringStatus, "NestedInUnwrappedType", Classify(declaring).RuleName == "AutoExclusion" ? "Declaring type auto-excluded: failed to compile" : "Declaring type is " + declaringStatus);
                 if (declaringStatus != WrapStatus.Wrapped) return new TypeClassification(WrapStatus.Deferred, "NestedInUnwrappedType", "Declaring type is " + declaringStatus);
+
+                var nestedName = CSharpNames.TypeDeclName(t);
+                if (IsInstanceWrapper(declaring) && WrapperSyntax.IsReserved(nestedName, DeclaresTarget(declaring))) return new TypeClassification(WrapStatus.NameCollision, "ReservedName", "Name reserved by the wrapper '" + nestedName + "'");
             }
 
-            if (t.IsEnum == false)
-            {
-                if (t.IsValueType) return new TypeClassification(WrapStatus.Deferred, "Struct", "Struct wrapper (step 2)");
-                if (t.IsInterface) return new TypeClassification(WrapStatus.Deferred, "Interface", "Interface wrapper (step 2)");
-                if (typeof(Delegate).IsAssignableFrom(t)) return new TypeClassification(WrapStatus.Deferred, "Delegate", "Delegate wrapper (step 3)");
-            }
+            if (t.IsEnum == false && typeof(Delegate).IsAssignableFrom(t)) return new TypeClassification(WrapStatus.Deferred, "Delegate", "Delegate wrapper (step 3)");
+
+            // A ref struct cannot be a wrapper field and cannot be boxed, so no wrapper shape fits it. The conversion rules reject it in signature position too.
+            if (IsByRefLike(t)) return new TypeClassification(WrapStatus.Unsupported, "RefStruct", "ref struct");
 
             foreach (var rule in m_TypeRules)
             {
@@ -224,6 +295,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             }
             return false;
         }
+
+        /// <summary>True when the type is a <c>ref struct</c> (ByRefLike): it can only live on the stack, so it fits neither a wrapper field nor a boxed comparison.</summary>
+        public static bool IsByRefLike(Type t) => t.IsValueType && t.GetCustomAttributesData().Any(a => a.AttributeType.FullName == c_IsByRefLikeAttribute);
 
         /// <summary>True when the member itself (not its declaring chain) is compiler-generated.</summary>
         internal static bool IsCompilerGeneratedMember(MemberInfo m) => m.Name.Contains('<') || m.GetCustomAttributesData().Any(a => a.AttributeType.FullName == c_CompilerGeneratedAttribute);

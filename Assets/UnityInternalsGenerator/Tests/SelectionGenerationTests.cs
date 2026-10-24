@@ -178,8 +178,8 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         [Test]
         public void SelectedMember_OfNonWrappedContainer_ReportedWithDeclaringStatus()
         {
-            // Member id under the Deferred struct Point, which has no member nodes.
-            var member = MemberId.Type(Fixture("Point")).Replace("|Type|Point", "|Method|Gone()");
+            // Member id under the Deferred delegate Callback, which has no member nodes.
+            var member = MemberId.Type(Fixture("Callback")).Replace("|Type|Callback", "|Method|Gone()");
             var entry = Entry(Generate(Only(member)).Entries, member);
             Assert.AreEqual(WrapStatus.Excluded, entry.Status);
             Assert.AreEqual("Declaring type is Deferred", entry.Reason);

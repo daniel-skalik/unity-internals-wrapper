@@ -16,7 +16,10 @@ namespace UnityInternalsFixture
         internal static void Reset() => Counter = 0;
         internal static void WithRef(ref int x) { }        // Deferred (ref/out, step 3)
         internal static T Echo<T>(T x) => x;                // Deferred (generic method, step 3)
-        internal static Holder MakeHolder() => new Holder(); // Deferred (wrapper conversion, step 2)
+        internal static Holder MakeHolder() => new Holder(); // Wrapped since step 2 (wrapper conversion)
+        internal static Point Shift(Point p, int by) => new Point(p.X + by); // struct across the boundary
+        internal static IThing MakeThing() => new Thing();   // interface across the boundary
+        internal static Branch Deepest() => new Leaf();      // static type Branch, runtime type Leaf
         [System.Obsolete("gone", true)] internal static void Dead() { } // Excluded ObsoleteError
         private static void Hidden() { }                    // NotAccessible
         internal enum Nested { X, Y }
@@ -35,11 +38,106 @@ namespace UnityInternalsFixture
     internal class Holder
     {
         internal static int StaticValue => 7;            // Wrapped
-        internal int InstanceValue => 1;                 // Deferred (instance members, step 2)
+        internal int InstanceValue => 1;                 // Wrapped since step 2
         public static Holder operator +(Holder a, Holder b) => a; // Deferred (operator, step 3)
     }
-    internal struct Point { }               // Deferred (step 2)
-    internal interface IThing { }           // Deferred (step 2)
+
+    /// <summary>Struct with state, so the wrapper's value semantics are observable.</summary>
+    internal struct Point
+    {
+        internal int X;
+        internal Point(int x) { X = x; }
+        internal int Doubled => X * 2;
+        internal int Shift(int by) => X + by;
+    }
+
+    /// <summary>Two indexers, so their ids must stay apart; the Point one pulls in exactly the wrapped type its index parameter needs.</summary>
+    internal class Grid
+    {
+        internal int this[int index] => index;           // same member name 'Item' as the one below
+        internal int this[Point p] => p.X;               // index parameter of a wrapped type
+    }
+
+    internal interface IThing
+    {
+        int Value { get; }
+        string Describe();
+    }
+
+    internal sealed class Thing : IThing
+    {
+        public int Value => 5;
+        public string Describe() => "thing";
+    }
+
+    /// <summary>Public base of the wrapped hierarchy: Branch's wrapper exposes it as Target.</summary>
+    public class FixtureNode
+    {
+        public int Depth;
+        internal virtual string Describe() => "node";
+    }
+
+    internal class Branch : FixtureNode
+    {
+        internal int Size;
+        internal Point Corner;
+
+        internal Branch() { }
+        internal Branch(int size) { Size = size; }
+        internal Branch(Point corner) { Corner = corner; }   // ctor parameter of a wrapped type
+
+        internal string Label { get; set; }
+        internal Point Origin { get; set; }
+        internal int this[int index] => Size + index;
+        internal override string Describe() => "branch";
+        internal int Twice() => Size * 2;
+    }
+
+    internal class Twig : Branch
+    {
+        internal Twig(int size) : base(size) { }
+        internal override string Describe() => "twig";      // emitted with 'new' on the Twig wrapper
+    }
+
+    internal sealed class Leaf : Twig
+    {
+        internal Leaf() : base(0) { }
+    }
+
+    internal abstract class AbstractThing
+    {
+        internal AbstractThing() { }                        // Deferred (inheritable, step 6)
+        internal abstract int Kind();
+    }
+
+    /// <summary>Derives from a public base, so its wrapper declares Target and the name is reserved.</summary>
+    internal class ReservedNames : FixtureNode
+    {
+        internal int Wrap() => 1;                           // NameCollision: reserved by the wrapper
+        internal int Target => 2;                           // NameCollision: reserved by the wrapper
+        internal int Fine => 3;                             // Wrapped
+    }
+
+    internal class ReservedNested : FixtureNode
+    {
+        internal int Fine => 3;                             // Wrapped
+        internal enum Target { A }                          // NameCollision: reserved by the wrapper
+    }
+
+    /// <summary>A struct wrapper declares no Target, so a member may take the name.</summary>
+    internal struct Spot
+    {
+        internal int Target;                                // Wrapped
+    }
+
+    /// <summary>A class wrapper over object declares no Target either, so a nested type may take the name.</summary>
+    internal class Unreserved
+    {
+        internal enum Target { A }                          // Wrapped
+    }
+
+    internal ref struct FixtureRefStruct { }    // Unsupported: a ref struct fits no wrapper shape
+
     internal delegate void Callback();      // Deferred (step 3)
     internal class Generic<T> { }           // Unsupported GenericType
     internal static class Collide { internal static int value; internal static int Value; } // PascalCase -> NameCollision
