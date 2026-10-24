@@ -12,7 +12,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
     /// <summary>
     /// Compiles the fixture wrappers with the Roslyn bundled in the editor, loads the assembly and exercises the runtime behaviour of
-    /// step 2. The fixture grants InternalsVisibleTo to the host name used here, so the generated code reaches the internals.
+    /// steps 2 and 4. The fixture grants InternalsVisibleTo to the host name used here, so the generated code reaches the internals.
     /// </summary>
     public sealed class WrapperRuntimeTests
     {
@@ -242,6 +242,69 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             corner.SetValue(wrapper, Wrap("Point", Unity("Point", 7)));
 
             Assert.AreEqual(7, x.GetValue(corner.GetValue(wrapper)));
+        }
+
+        /// <summary>The implicit conversion to the wrapper's own type; <paramref name="name"/> names both the wrapper and the Unity type.</summary>
+        private static MethodInfo FromUnity(string name) => Wrapper(name).GetMethods(c_Declared).Single(m => m.Name == "op_Implicit" && m.ReturnType == Wrapper(name));
+
+        private static MethodInfo ToUnity(string name) => Wrapper(name).GetMethods(c_Declared).Single(m => m.Name == "op_Implicit" && m.ReturnType == Fixture(name));
+
+        [Test]
+        public void PublicTypeWrapper_ConvertsImplicitlyBothWays()
+        {
+            var unity = Unity("PublicThing", 3);
+            var wrapper = FromUnity("PublicThing").Invoke(null, new[] { unity });
+
+            Assert.AreEqual(Wrapper("PublicThing"), wrapper.GetType());
+            Assert.AreEqual(3, Property("PublicThing", "Size").GetValue(wrapper));
+            Assert.AreSame(unity, ToUnity("PublicThing").Invoke(null, new[] { wrapper }));
+            Assert.AreSame(unity, Property("PublicThing", "Target").GetValue(wrapper));
+            Assert.IsNull(FromUnity("PublicThing").Invoke(null, new object[] { null }));
+        }
+
+        [Test]
+        public void PublicStructWrapper_ConvertsBothWays_AndWritesThrough()
+        {
+            var wrapper = FromUnity("PublicSpot").Invoke(null, new[] { Activator.CreateInstance(Fixture("PublicSpot")) });
+
+            Property("PublicSpot", "Value").SetValue(wrapper, 5);
+
+            Assert.AreEqual(5, Property("PublicSpot", "Value").GetValue(wrapper));
+            Assert.AreEqual(10, Method("PublicSpot", "Twice").Invoke(wrapper, null));
+            Assert.AreEqual(5, Fixture("PublicSpot").GetField("Value", c_Declared).GetValue(ToUnity("PublicSpot").Invoke(null, new[] { wrapper })));
+        }
+
+        [Test]
+        public void PublicStaticHostWrapper_ForwardsStatics_AndHasNoConstructor()
+        {
+            var api = Wrapper("PublicApi");
+
+            Assert.IsTrue(api.IsAbstract && api.IsSealed);
+            Assert.IsEmpty(api.GetConstructors(c_Ctor));
+            Assert.IsNull(api.GetMethod("Visible", c_Declared));
+            Assert.DoesNotThrow(() => Method("PublicApi", "Hidden").Invoke(null, null));
+            Assert.AreEqual(2, Method("PublicThing", "Make").Invoke(null, new object[] { 2 }));
+        }
+
+        [Test]
+        public void InternalConstructorOfAPublicType_BecomesAPublicWrapperConstructor()
+        {
+            var wrapper = Activator.CreateInstance(Wrapper("PublicThing"), new object[] { 7 });
+
+            Assert.AreEqual(7, Property("PublicThing", "Size").GetValue(wrapper));
+            Assert.AreEqual(14, Property("PublicThing", "Doubled").GetValue(wrapper));
+            Assert.AreEqual(9, Method("PublicThing", "Grow").Invoke(wrapper, new object[] { 2 }));
+            Assert.AreEqual(8, Indexer("PublicThing", typeof(int)).GetValue(wrapper, new object[] { 1 }));
+        }
+
+        [Test]
+        public void InternalNestedTypeOfAPublicType_IsNestedInTheWrapper()
+        {
+            var inner = Wrapper("PublicHost").GetNestedType("InnerMode", BindingFlags.Public);
+
+            Assert.IsNotNull(inner);
+            Assert.IsTrue(inner.IsEnum);
+            Assert.AreEqual(Wrapper("PublicHost"), inner.DeclaringType);
         }
     }
 }

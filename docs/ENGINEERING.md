@@ -28,7 +28,7 @@ The chosen host name is written back to the settings asset (`HostAssemblyName`).
 | Context | `Model/GenerationContext.cs` | Memoized type classification and member plans, conversions, report sink, file-path collision rejection, emitted-set filter (`ApplySelection`, `IsEmitted`) |
 | Selection | `Selection/` (`SelectionRules`, `CatalogBuilder`, `Catalog`, `CatalogNode`, `SelectionResolver`, `SelectionResult`, `SelectionEditing`) | Node tree of the classified input, allowlist rules, resolution to the emitted set, tri-state editing |
 | Browser | `Browser/BrowserModel.cs`, `Browser/UnityInternalsBrowserWindow.cs` | Search/filter rows (pure) and the IMGUI selection window |
-| Type rules | `Rules/TypeRules.cs`, `Rules/TypeClassification.cs` | Decide the status of each non-public type, and emit it (enum mirror, static class, instance wrapper) |
+| Type rules | `Rules/TypeRules.cs`, `Rules/TypeClassification.cs` | Decide the status of each candidate type, and emit it (enum mirror, static class, instance wrapper, public-type wrapper) |
 | Member rules | `Rules/MemberRules.cs`, `Rules/MemberPlanner.cs` | Per-member status, name collisions, parameter/default/`Caller*` attribute syntax |
 | Conversions | `Rules/ConversionRules.cs`, `Rules/Conversion.cs` | Maps internal types to wrapper types, casts, wraps/unwraps |
 | Wrapper shape | `Rules/WrapperSyntax.cs` | The names the instance wrappers own (`m_Value`, `Wrap`, `Target`) and the registry location |
@@ -90,9 +90,51 @@ because a public member may not expose an internal type (CS0051).
   runs: a ByRefLike value cannot be a wrapper field (CS8345) and cannot be boxed for `Equals(object)`. The same helper
   backs `UnsupportedConversionRule`, which rejects them in parameter and return position.
 
+## Wrappers for public types (internal members of public types)
+
+Most reachable Unity internals are `internal` members of **public** types (`UnityEditor.Menu.AddMenuItem`). A public
+type that declares accessible-internal members, or that contains a type needing it as a container, is classified by
+`PublicTypeInternalMembersRule` (rule name `PublicTypeInternalMembers`, first in `TypeRules.CreateOrdered`) and emitted
+by `PublicTypeGenerator`, which dispatches to the same shape generators internal types use: static class
+(`abstract sealed`) to a `public static class` with static forwarding members and no constructor, struct to a struct
+wrapper, interface to an interface wrapper class, anything else to a class wrapper. Design:
+`docs/design/2026-10-24-step4-public-type-internals-design.md`.
+
+- **Only the internal members are mirrored.** `MemberPlanner.DeclaredMembers` keeps only members matching
+  `MemberPlanner.IsInternalMember` (`internal` or `protected internal`) when the declaring type is `IsVisible`; public
+  members get no plan, no verdict, no report entry and no catalog node, because they are already reachable without the
+  wrapper. `protected` and `private` members wait for step 7. A property with a public getter and an internal setter is
+  one member and is emitted whole. An internal constructor becomes a public wrapper constructor.
+- **Which public types qualify** (`GenerationContext.IsPublicHost`, memoized, consulted from `IsClassifiable`): it
+  declares an accessible-internal member, or it declares a non-visible nested type (internal, protected **or private**,
+  compiler-generated ones skipped), or it declares a public nested type that qualifies itself. The last two make the
+  type a container, so every nested catalog type hangs under its declaring type. A container with nothing emittable
+  produces no file, like an internal class whose members are all private. The rest of `ClassifyCore` runs unchanged, so
+  a qualifying public type can still come out `Unsupported` (generic type definition, `ref struct`), `NoBridgeAccess` or
+  `Excluded`.
+- **`Target` is the type itself**, not the first public base (`GenerationContext.TargetType`), and struct and interface
+  wrappers of public types declare it too. It is reserved on them like on any instance wrapper, so an internal member
+  named `Target` is `NameCollision`.
+- **The conversion runs both ways**: `implicit operator <UnityType>(<wrapper>)` as for internal wrappers, plus
+  `implicit operator <wrapper>(<UnityType>)` returning `Wrap(value)`, which only a public type allows. A public
+  *interface* gets neither (C# forbids an interface as either operand of a user-defined conversion, CS0552), so its
+  wrapper exposes only `Target`.
+- **No hierarchy, no registry entry.** Every wrapper of a public type is a root exposing its own `DeclaredOnly`
+  members; `WrappedUnityEditor.EditorWindow` does not derive from `WrappedUnityEngine.ScriptableObject`. Reach a base
+  type's internals through that base type's own wrapper: the implicit conversions get there in one step
+  (`WrappedUnityEngine.ScriptableObject w = myEditorWindow;`). Because these wrappers never inherit one another they
+  are left out of `WrapperRegistry` (`WrapperGenerator.EmitRegistry` skips visible types) and their `Wrap` constructs
+  directly. Internal types deriving from a public type are unchanged: their wrapper stays a root with `Target` typed to
+  that public base.
+- **Public types still pass through signatures as themselves** (`PassthroughConversionRule` matches every visible type
+  before `WrapperConversionRule`), so wrapping a public type changes no other wrapper's API. The wrapper of a public
+  type appears in generated code only as the nesting prefix of a wrapper nested inside it
+  (`WrappedUnityEditor.PublicHost.InnerMode`). Consequently a public type in a signature is not a selection dependency:
+  `CatalogBuilder.Dependencies` filters on `GenerationContext.NeedsWrapper` (non-visible and `Wrapped`).
+
 ## Statuses
 
-`WrapStatus`: `Wrapped`, `Deferred` (planned later: delegates, events, operators, generic methods, arrays/collections/`Nullable`, `ref`/`out`, generic parameters, internal members of public types, constructors of inheritable types), `Unsupported` (pointers, `TypedReference`, `ref struct`, generic type definitions, parameterless struct constructors, `VarArgs`, unformattable const values, no rule matched), `Excluded` (`AutoExclusion`, compiler-generated, obsolete-error, static ctor, nested in an excluded type; selection never produces it), `NotAccessible`, `NoBridgeAccess` (id `<Assembly>|*`), `NameCollision`, `CompileFailed` (auto-excluded after pre-compile; reason is `<Code>: <Message>`), `SelectedMissing` (report-only: a selection rule id absent from the current Unity). Nested types hidden by an auto-excluded type read `Declaring type auto-excluded: failed to compile`. Auto-excludes are never persisted.
+`WrapStatus`: `Wrapped`, `Deferred` (planned later: delegates, events, operators, generic methods, arrays/collections/`Nullable`, `ref`/`out`, generic parameters, constructors of inheritable types), `Unsupported` (pointers, `TypedReference`, `ref struct`, generic type definitions, parameterless struct constructors, `VarArgs`, unformattable const values, no rule matched), `Excluded` (`AutoExclusion`, compiler-generated, obsolete-error, static ctor, nested in an excluded type; selection never produces it), `NotAccessible`, `NoBridgeAccess` (id `<Assembly>|*`), `NameCollision`, `CompileFailed` (auto-excluded after pre-compile; reason is `<Code>: <Message>`), `SelectedMissing` (report-only: a selection rule id absent from the current Unity). Nested types hidden by an auto-excluded type read `Declaring type auto-excluded: failed to compile`. Auto-excludes are never persisted.
 
 Ids: `Assembly|Namespace.Outer+Inner|Kind|Name(ParamType,...)` (`Model/MemberId.cs`; type ids are `Assembly|Namespace.Outer+Inner|Type|Inner`). Methods, constructors and indexers carry their parameter types, so the two indexers of one type (both named `Item`) get different ids; a non-indexer property is `…|Property|<Name>` with no parentheses. Namespace node ids are `ns:<FullNamespace>` (assembly-agnostic; global namespace `ns:`), built by `SelectionIds.Namespace`; the parent of `ns:A.B` is `ns:A`, a top-level namespace has no parent.
 
@@ -101,7 +143,7 @@ Ids: `Assembly|Namespace.Outer+Inner|Kind|Name(ParamType,...)` (`Model/MemberId.
 Classification is selection-agnostic; the selection only decides what is emitted.
 
 - **Catalog** (`Selection/CatalogBuilder.cs`, `Catalog.cs`, `CatalogNode.cs`): one node per namespace, classified type (compiler-generated types omitted) and considered member (`GenerationContext.MemberVerdicts`; members only under `Wrapped` non-enum types). `NodeKind` covers `Namespace`, `Class`, `StaticClass`, `Struct`, `Interface`, `Enum`, `Method`, `Constructor`, `Property`, `Indexer`, `Field`, `Const`, `Other` (the Browser only prints the kind). A nested type's parent is its declaring type when that has a node, otherwise its namespace. Each member node carries the ids of the wrapped internal types its signature needs (`DependencyTypeIds`: return/field/property type, method, constructor and indexer parameters). A wrapper's base is not a dependency — the base-chain walk skips unemitted internal bases, so the wrapper compiles on its own. Siblings (`Catalog.ChildrenOf`) form one list sorted by name `OrdinalIgnoreCase`, ties by kind (namespace, type, member) then id ordinal, so namespaces and types interleave.
-- **Public types with internal members:** for each source assembly, every public (`IsVisible`), non-compiler-generated type that declares (`DeclaredOnly`) an accessible-internal member (method/ctor `IsAssembly`/`IsFamilyOrAssembly`, property/event with such an accessor, field `IsAssembly`/`IsFamilyOrAssembly`) gets a type node with status `Deferred`, reason `PublicTypeInternalMembers (step 4)` (`CatalogBuilder.PublicTypeInternalMembersReason`), and one `Deferred` member node (same reason, no dependencies) per such member (accessor methods, static ctors and compiler-generated members skipped). Public declaring types of internal nested catalog types and of such public types also get a (possibly memberless) `Deferred` node, so internal types nested in public types (for example `PublicHost+InnerMode`) sit under their public declaring type. These nodes are never `Wrapped`, so the resolver never emits them; they produce no report entries. Example: `UnityEditor.Menu` lists `AddMenuItem`.
+- **Public types with internal members** are ordinary classified types (see "Wrappers for public types"), so they produce nodes, report entries, selection, dependency auto-inclusion and `SelectedMissing` behaviour through the same paths as internal types; their member nodes are only the accessible-internal ones, and an internal nested type sits under its public declaring type. Example: `UnityEditor.Menu` lists `AddMenuItem`, both `Wrapped`.
 - **Rules** (`Selection/SelectionRules.cs`): two normalized id lists, `Included` and `Excluded` (exceptions). `IsSelected` walks the id and its ancestors; the first (deepest) rule found decides; no rule means not selected. Including a namespace or type selects everything beneath it, including members and nested types that appear in later Unity versions. `SelectionRules.All` selects everything (tests, Browser catalog build) and is not editable; `IsEmpty` is true when there are no `Included` ids.
 - **Resolution** (`Selection/SelectionResolver.cs` -> `SelectionResult`): emitted members = selected `Wrapped` members; emitted types = selected `Wrapped` enums, plus every type an emitted member's signature needs, plus the declaring-type containers of all emitted members and types. A type needed by an emitted member is emitted even when unticked or excepted (dependency beats exception iff needed); it is not emitted when nothing needs it. Selection exceptions never mark anything `Excluded`, and dependency need never resurrects a `CompileFailed` (auto-excluded) type or member; the cascade is reported. `AutoIncludedBy` maps each emitted-but-unselected type to the ordinal-smallest requiring id (a member or a type id). `MissingIds` = rule ids (included or excepted) absent from the catalog. `EmittedFileCount` = emitted top-level types.
 - **Empty classes:** a class with nothing emittable (no emitted members, no emitted nested types) produces no file and, when nested, no nested class. This holds also with `SelectionRules.All`.
@@ -148,8 +190,8 @@ Types sorted by FullName ordinal, members by metadata token, entries by id then 
 
 - Struct-typed fields (static and instance): the wrapper property returns a copy; writes to struct members through it do not reach the original.
 - Internal interfaces are wrapper classes, so consumers cannot implement them (that is step 6), and members a derived interface inherits are not re-emitted on its wrapper.
-- Members of internal instance types named `m_Value`, `Wrap`, `Target`, `Equals` or `GetHashCode` are dropped as `NameCollision` rather than renamed.
+- Members of instance wrappers named `m_Value`, `Wrap`, `Target`, `Equals` or `GetHashCode` are dropped as `NameCollision` rather than renamed. A wrapper of a public type always declares `Target`, so an internal member of a public type with that name is unreachable.
 - A class wrapper stores one reference per hierarchy level (`m_Value` per level).
-- `using UnityEditor;` together with `using WrappedUnityEditor;` makes same-named types ambiguous; qualify or alias.
+- `using UnityEditor;` together with `using WrappedUnityEditor;` makes same-named types ambiguous (CS0104); qualify or alias (`using WrappedEditorWindow = WrappedUnityEditor.EditorWindow;`). Since step 4 the colliding names include the most familiar Unity types, because a public type's wrapper carries that type's own simple name. Accepted by design (A2/A3): a disambiguating suffix would break the identical-names promise.
 - About 15 types end `CompileFailed` because their signatures reference Bee/Cecil assemblies that are not in the reference set.
 - `Caller*` attributes are copied onto wrapper parameters, so the caller info reflects the wrapper caller.

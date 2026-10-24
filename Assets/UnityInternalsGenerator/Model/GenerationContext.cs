@@ -14,6 +14,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
     {
         private const string c_CompilerGeneratedAttribute = "System.Runtime.CompilerServices.CompilerGeneratedAttribute";
         private const string c_IsByRefLikeAttribute = "System.Runtime.CompilerServices.IsByRefLikeAttribute";
+        private const BindingFlags c_DeclaredMembers = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
         private readonly GenerationInput m_Input;
         private readonly HashSet<Assembly> m_Sources;
@@ -26,6 +27,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         private readonly Dictionary<Type, Conversion> m_Conversions = new Dictionary<Type, Conversion>();
         private readonly Dictionary<Assembly, bool> m_Grants = new Dictionary<Assembly, bool>();
         private readonly Dictionary<Type, HashSet<string>> m_EmittedShapes = new Dictionary<Type, HashSet<string>>();
+        private readonly Dictionary<Type, bool> m_PublicHosts = new Dictionary<Type, bool>();
         private readonly List<ReportEntry> m_Entries = new List<ReportEntry>();
         private readonly Func<Type, string> m_WrappedTypeMap;
         private HashSet<string> m_EmittedTypeIds;
@@ -62,6 +64,12 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         public bool IsInstanceWrapper(Type t) => IsWrappedType(t) && t.IsEnum == false && IsStaticClass(t) == false;
 
         /// <summary>
+        /// True when a signature of this type makes the wrapper reference the generated wrapper of <paramref name="t"/>.
+        /// A public type passes through as itself (<see cref="Rules.PassthroughConversionRule"/>), even when it has a wrapper of its own.
+        /// </summary>
+        public bool NeedsWrapper(Type t) => t.IsVisible == false && IsWrappedType(t);
+
+        /// <summary>
         /// The wrapper the wrapper of <paramref name="t"/> derives from: the nearest internal base emitted as an instance wrapper.
         /// Null when a public base comes first (then the wrapper is a root, see <see cref="PublicBase"/>) or when there is no base at all.
         /// </summary>
@@ -88,10 +96,26 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         }
 
         /// <summary>
-        /// True when the type's wrapper declares <see cref="Rules.WrapperSyntax.TargetProperty"/>, or inherits it from the wrapper it derives from:
-        /// only a class wrapper does, and only when a public base other than <see cref="object"/> comes up its base chain.
+        /// The public type the wrapper exposes as <see cref="Rules.WrapperSyntax.TargetProperty"/>: a public type's wrapper exposes
+        /// the type itself (step 4), an internal class wrapper its <see cref="PublicBase"/>. Null when there is nothing to expose.
         /// </summary>
-        public bool DeclaresTarget(Type t) => t != null && t.IsClass && PublicBase(t) != null;
+        public static Type TargetType(Type t, bool isClassWrapper)
+        {
+            if (t.IsVisible) return t;
+            return isClassWrapper ? PublicBase(t) : null;
+        }
+
+        /// <summary>
+        /// True when the type's wrapper declares <see cref="Rules.WrapperSyntax.TargetProperty"/>, or inherits it from the wrapper it derives from.
+        /// A public type's wrapper always does (it exposes the type itself) unless it is a static class; an internal one only when it is a
+        /// class wrapper with a public base other than <see cref="object"/> up its chain.
+        /// </summary>
+        public bool DeclaresTarget(Type t)
+        {
+            if (t == null) return false;
+            if (t.IsVisible) return t.IsEnum == false && IsStaticClass(t) == false;
+            return t.IsClass && PublicBase(t) != null;
+        }
 
         /// <summary>True when the member's emitted shape repeats a name (and, where overloadable, a signature) an emitted wrapper base already declares, so it needs <c>new</c>.</summary>
         public bool HidesWrapperBaseMember(MemberInfo m)
@@ -159,7 +183,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
         /// <summary>Memoized. Reports the status to <see cref="Entries"/> exactly once per classifiable type.</summary>
         public TypeClassification Classify(Type t)
         {
-            if (IsClassifiable(t) == false) return new TypeClassification(WrapStatus.Unsupported, "NotClassifiable", "Not a non-public type of a source assembly");
+            if (IsClassifiable(t) == false) return new TypeClassification(WrapStatus.Unsupported, "NotClassifiable", "Not a wrappable type of a source assembly");
             if (m_Classifications.TryGetValue(t, out var cached)) return cached;
 
             var result = ClassifyCore(t);
@@ -187,7 +211,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             return plan;
         }
 
-        /// <summary>All non-public types of the source assemblies are classified (and reported); returns those Wrapped, sorted by FullName ordinal.</summary>
+        /// <summary>Every classifiable type of the source assemblies is classified (and reported); returns those Wrapped, sorted by FullName ordinal.</summary>
         public IReadOnlyList<Type> ClassifyAll()
         {
             var wrapped = new List<Type>();
@@ -237,7 +261,6 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             var declaring = t.DeclaringType;
             if (declaring != null)
             {
-                if (declaring.IsVisible) return new TypeClassification(WrapStatus.Deferred, "NestedInPublicType", "PublicTypeInternalMembers (step 4)");
                 var declaringStatus = Classify(declaring).Status;
                 if (declaringStatus == WrapStatus.Excluded || declaringStatus == WrapStatus.NotAccessible) return new TypeClassification(declaringStatus, "NestedInUnwrappedType", Classify(declaring).RuleName == "AutoExclusion" ? "Declaring type auto-excluded: failed to compile" : "Declaring type is " + declaringStatus);
                 if (declaringStatus != WrapStatus.Wrapped) return new TypeClassification(WrapStatus.Deferred, "NestedInUnwrappedType", "Declaring type is " + declaringStatus);
@@ -258,12 +281,39 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             return new TypeClassification(WrapStatus.Unsupported, "NoRule", "No type rule matched");
         }
 
-        // Plain non-public, non-constructed types declared in a source assembly; everything else never gets a classification.
+        // Plain, non-constructed types declared in a source assembly: every non-public one, and the public ones a wrapper can reach into.
         private bool IsClassifiable(Type t)
         {
-            if (t.HasElementType || t.IsGenericParameter || t.IsVisible) return false;
+            if (t.HasElementType || t.IsGenericParameter) return false;
             if (t.IsGenericType && t.IsGenericTypeDefinition == false) return false;
-            return IsSourceType(t);
+            if (IsSourceType(t) == false) return false;
+            return t.IsVisible == false || IsPublicHost(t);
+        }
+
+        /// <summary>
+        /// Memoized. True when a public type is worth a wrapper (step 4): it declares an accessible-internal member, or it
+        /// contains a type that needs it as its container — any non-visible nested type, or a public nested type that qualifies itself.
+        /// </summary>
+        private bool IsPublicHost(Type t)
+        {
+            if (m_PublicHosts.TryGetValue(t, out var cached)) return cached;
+
+            var host = DeclaresInternalMember(t) || ContainsCatalogNestedType(t);
+            m_PublicHosts[t] = host;
+            return host;
+        }
+
+        private static bool DeclaresInternalMember(Type t) =>
+            t.GetMembers(c_DeclaredMembers).Any(m => MemberPlanner.IsInternalMember(m) && IsCompilerGeneratedMember(m) == false);
+
+        private bool ContainsCatalogNestedType(Type t)
+        {
+            foreach (var nested in t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (IsCompilerGenerated(nested)) continue;
+                if (nested.IsVisible == false || IsPublicHost(nested)) return true;
+            }
+            return false;
         }
 
         private bool SourceGrantsHost(Assembly a)

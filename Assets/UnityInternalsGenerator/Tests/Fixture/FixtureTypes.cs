@@ -148,7 +148,62 @@ namespace UnityInternalsFixture
 }
 namespace UnityInternalsFixture
 {
-    public static class PublicHost { internal enum InnerMode { A } }
-    public static class PublicApi { internal static void Hidden() { } public static void Visible() { } } // public type with an internal member: Deferred, lists Hidden only
+    public static class PublicHost { internal enum InnerMode { A } }   // the nested enum is emitted inside the host's wrapper
+    public static class PublicApi { internal static void Hidden() { } public static void Visible() { } } // static host: only Hidden is mirrored
     internal static class Lambdas { internal static System.Func<int, int> Increment = x => x + 1; } // compiler-generated <>c
+
+    /// <summary>Public instance type with internal members: the wrapper mirrors those and nothing public.</summary>
+    public class PublicThing
+    {
+        public int PublicField;                             // not mirrored
+        internal int Size;
+        internal Point Corner;                              // needs the wrapped Point, so selecting it auto-includes that type
+        internal static int Counter;
+
+        internal PublicThing(int size) { Size = size; }     // internal ctor -> public wrapper ctor
+
+        internal string Label { get; set; }
+        internal int Doubled => Size * 2;
+        protected internal int Shared => 1;                 // protected internal really is internal-accessible
+        protected int Family => 2;                          // not mirrored (step 7)
+        public int PublicProperty => 3;                     // not mirrored
+        internal int this[int index] => Size + index;
+        internal int Grow(int by) => Size + by;
+        internal static int Make(int size) => new PublicThing(size).Size;
+        public int PublicMethod() => 4;                     // not mirrored
+        private int Hidden() => 5;                          // not mirrored
+    }
+
+    /// <summary>Public struct with internal state, so the wrapper's write-through and value semantics are observable.</summary>
+    public struct PublicSpot
+    {
+        public int Open;                                    // not mirrored
+        internal int Value;
+        internal int Twice() => Value * 2;
+    }
+
+    /// <summary>Public type nested in a public type: both qualify, so the wrapper nests the same way.</summary>
+    public static class PublicOuter
+    {
+        public static class PublicInner { internal static int Depth() => 2; }
+    }
+
+    /// <summary>Only a private nested type, so this node exists purely as the container of that NotAccessible node.</summary>
+    public static class PublicPrivateNest
+    {
+        private enum Secret { S }                           // NotAccessible, and the only reason PublicPrivateNest is a node at all
+    }
+
+    /// <summary>Derives from a public base that is itself a host; the base's internal members stay on the base's own wrapper.</summary>
+    public class PublicDerived : FixtureNode
+    {
+        internal int Own => 1;
+    }
+
+    /// <summary>A public host's wrapper declares Target, so an internal member may not take the name.</summary>
+    public class PublicReserved
+    {
+        internal int Target => 1;                           // NameCollision: reserved by the wrapper
+        internal int Fine => 2;                             // Wrapped
+    }
 }

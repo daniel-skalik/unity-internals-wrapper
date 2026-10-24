@@ -2,7 +2,7 @@
 
 ## What exists
 - `Assets/UnityInternalsGenerator/` — full generator source, moved unchanged from s1-new (`Assets/DandaUtils/Editor/UnityInternalsGenerator/`). Still named `DandaUtils.*` (namespaces, asmdefs, menus `Tools/DandaUtils/Unity Internals/…`, settings page `Project/DandaUtils/…`, settings file `ProjectSettings/UnityInternalsGeneratorSettings.asset`, meta GUID seed `DandaUtils.UnityInternalsGenerator:`).
-- Tests: `Assets/UnityInternalsGenerator/Tests/` (253 EditMode tests, all passing; plus one `[Explicit]` real run over the CoreModules. Fixture assembly `Tests/Fixture` with IVT to `Wrapped.Fixture.Host`; `WrapperRuntimeTests` compiles the fixture wrappers with the bundled Roslyn, loads the DLL and exercises them).
+- Tests: `Assets/UnityInternalsGenerator/Tests/` (EditMode, all passing; plus one `[Explicit]` real run over the CoreModules. Fixture assembly `Tests/Fixture` with IVT to `Wrapped.Fixture.Host`; `WrapperRuntimeTests` compiles the fixture wrappers with the bundled Roslyn, loads the DLL and exercises them).
 - Docs: `docs/ENGINEERING.md` (how the code works), `docs/DECISIONS.md`, `docs/design/*`, `docs/plans/*`.
 
 ## To compile/test
@@ -22,11 +22,22 @@ Source is plain Unity editor code — it must sit inside a Unity project's `Asse
 
   (`NameCollision` is new because wrapper-reserved names are now rejected; the remaining `CompileFailed` are instance members whose signatures reach assemblies outside the reference set, see A11. The one extra `Unsupported` over the first step 2 measurement is a `ref struct`, now rejected by classification instead of by the compile loop, which is what removes two `CompileFailed`.)
 
+- **Step 4 (internal members of public types):** public Unity types with accessible-internal members are ordinary classified types wrapped by the `PublicTypeInternalMembers` rule, mirroring only those members, with `Target` typed to the type itself and implicit conversions **both ways** (none for a public interface, CS0552). Static-class hosts get static forwarding members and no constructor; internal nested types are emitted inside the public type's wrapper; wrappers of public types are roots and are not registered in `WrapperRegistry`. `CatalogBuilder` lost its bolted-on public-type path, so these nodes report, select, auto-include dependencies and produce `SelectedMissing` through the normal paths. Design `docs/design/2026-10-24-step4-public-type-internals-design.md`, plan `docs/plans/2026-10-24-step4-public-type-internals-plan.md`.
+
+  Real run over the same two CoreModules (Unity 6000.0.59f2, 4 pre-compile passes, clean): **645 public types wrapped, 5055 of their members considered, 4644 of them `Wrapped`**.
+
+  | | files | Wrapped | Deferred | Unsupported | Excluded | NotAccessible | NameCollision | CompileFailed |
+  |---|---|---|---|---|---|---|---|---|
+  | step 2 | 2503 | 22522 | 2188 | 278 | 1924 | 19222 | 82 | 25 |
+  | step 4 | 3075 | 28577 | 2353 | 332 | 1984 | 19386 | 89 | 38 |
+
+  (`NotAccessible` grows because private and protected nested types of public types are now classified at all — that is what fixes their catalog parenting. `Deferred`, `Unsupported`, `NameCollision` and `CompileFailed` grow with the 411 members of public types that those categories claim: events, operators, generic methods, `ref`/`out`, arrays, the reserved name `Target`, and signatures reaching assemblies outside the reference set (A11).)
+
 ## Planned steps (from design)
 1. ~~Skeleton~~ ✅
 2. ~~Instance class + struct + interface wrappers, Wrap/Unwrap conversion, hierarchy, constructors, indexers~~ ✅
 3. Delegates/events, arrays, List/IEnumerable, Nullable, ref/out, operators, generic methods.
-4. Internal members of public types (e.g. `UnityEditor.Menu.AddMenuItem`) — currently listed in Browser as Deferred.
+4. ~~Internal members of public types (e.g. `UnityEditor.Menu.AddMenuItem`)~~ ✅
 5. Compile-feedback hardening, widen default assemblies.
 6. Inheritable proxies (subclass internal abstract types, e.g. `SubToolbar`).
 7. Privates via reflection.
@@ -37,15 +48,16 @@ Source is plain Unity editor code — it must sit inside a Unity project's `Asse
 - Real-input test of the Browser (mouse/keyboard) has never been done — only reflection + unit tests.
 
 ## Known minor issues (deferred, none blocking)
-- Selected member of a public type that disappears in a newer Unity reads "Declaring type is Deferred" instead of SelectedMissing.
 - Search: collapsed matched container still shows matching descendants while its arrow says collapsed.
-- Private/protected nested types of public types parented inconsistently in the catalog.
+- A public type that is only a container (its sole non-visible nested types are private or protected) reads `Wrapped` in the Browser although it generates nothing — same as an internal class whose members are all private.
+- A public interface declaring internal members would get a wrapper with `Target` and no conversion operators (CS0552); the shape is implemented but no fixture covers it, because non-public interface members need default-interface-member runtime support that the fixture assembly cannot rely on.
+- Wrappers of public types do not mirror each other's base chains (by design, see the step 4 design doc), so a base type's internal members are only on the base type's own wrapper.
 - Browser rebuilds the catalog (~1.3 s) on every domain reload while visible; index-based TreeView ids remap after a catalog change.
 - `[Obsolete]` not copied onto wrapped types / enum values; enum values get no report entries.
 - csc `WaitForExit` has a 10-min timeout but no test; failure-path report marks still-present members CompileFailed.
 - Struct-typed static fields and struct-typed instance fields return copies (documented).
 - Internal interfaces are wrapper classes, so consumers cannot implement them (step 6), and inherited interface members are not re-emitted on a derived interface's wrapper.
-- Members of internal instance types named `m_Value`/`Wrap`/`Equals`/`GetHashCode`, and `Target` on the shapes that declare it (a class wrapper with a non-`object` public base, and the wrappers inheriting it), are dropped as `NameCollision` instead of renamed (82 in the CoreModules).
+- Members of instance wrappers named `m_Value`/`Wrap`/`Equals`/`GetHashCode`, and `Target` on the shapes that declare it (a class wrapper with a non-`object` public base and the wrappers inheriting it, and every wrapper of a public type), are dropped as `NameCollision` instead of renamed (89 in the CoreModules).
 - A class wrapper stores one reference per hierarchy level.
 - `using UnityEditor;` + `using WrappedUnityEditor;` together → ambiguous names (accepted by design).
 - Some test hygiene: duplicated FakeCompiler/LineOf helpers, a few weak assertions.

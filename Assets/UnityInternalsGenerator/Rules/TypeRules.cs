@@ -14,6 +14,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         /// <summary>Evaluated in order after pre-checks (access, generics, nesting, delegates) pass. A match means the type is Wrapped.</summary>
         public static IReadOnlyList<ITypeRule> CreateOrdered() => new ITypeRule[]
         {
+            new PublicTypeInternalMembersRule(),
             new EnumTypeRule(),
             new StaticClassTypeRule(),
             new StructTypeRule(),
@@ -35,6 +36,38 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             {
                 classification.Generator.Emit(t, w, ctx);
             }
+        }
+    }
+
+    /// <summary>
+    /// A public Unity type whose accessible-internal members (or nested types) are worth a wrapper — step 4.
+    /// Matched before the shape rules, so the report names one rule for the whole public-type case; the emitted shape is
+    /// the one an internal type of the same kind gets.
+    /// </summary>
+    public sealed class PublicTypeInternalMembersRule : ITypeRule
+    {
+        public string Name => "PublicTypeInternalMembers";
+
+        public ITypeGenerator Generator { get; } = new PublicTypeGenerator();
+
+        public bool Match(Type t, GenerationContext ctx) => t.IsVisible && t.IsEnum == false;
+    }
+
+    /// <summary>Dispatches a public type to the shape generator it needs: static class, struct, interface or class.</summary>
+    public sealed class PublicTypeGenerator : ITypeGenerator
+    {
+        private static readonly ITypeGenerator s_StaticClass = new ClassTypeGenerator();
+        private static readonly ITypeGenerator s_Struct = new WrapperTypeGenerator(WrapperKind.Struct);
+        private static readonly ITypeGenerator s_Interface = new WrapperTypeGenerator(WrapperKind.Interface);
+        private static readonly ITypeGenerator s_Class = new WrapperTypeGenerator(WrapperKind.Class);
+
+        public void Emit(Type t, CodeWriter w, GenerationContext ctx) => For(t).Emit(t, w, ctx);
+
+        private static ITypeGenerator For(Type t)
+        {
+            if (t.IsValueType) return s_Struct;
+            if (t.IsInterface) return s_Interface;
+            return t.IsAbstract && t.IsSealed ? s_StaticClass : s_Class;
         }
     }
 
@@ -169,18 +202,30 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             w.Line();
             w.Line("internal " + name + "(" + unity + " value)" + (isRoot ? string.Empty : " : base(value)") + " { " + WrapperSyntax.ValueField + " = value; }");
             w.Line();
-            w.Line("internal static " + name + " " + WrapperSyntax.WrapMethod + "(" + unity + " value) => " + WrapExpression(name) + ";");
+            w.Line("internal static " + name + " " + WrapperSyntax.WrapMethod + "(" + unity + " value) => " + WrapExpression(name, t) + ";");
 
             if (isRoot == false) return;
 
-            var publicBase = m_Kind == WrapperKind.Class ? GenerationContext.PublicBase(t) : null;
-            if (publicBase != null)
+            var target = GenerationContext.TargetType(t, m_Kind == WrapperKind.Class);
+            if (target != null)
             {
-                var publicRef = CSharpNames.TypeRef(publicBase);
+                var targetRef = CSharpNames.TypeRef(target);
                 w.Line();
-                w.Line("public " + publicRef + " " + WrapperSyntax.TargetProperty + " => " + WrapperSyntax.ValueField + ";");
-                w.Line();
-                w.Line("public static implicit operator " + publicRef + "(" + name + " wrapper) => wrapper?." + WrapperSyntax.ValueField + ";");
+                w.Line("public " + targetRef + " " + WrapperSyntax.TargetProperty + " => " + WrapperSyntax.ValueField + ";");
+
+                // An interface may be neither operand of a user-defined conversion (CS0552), so an interface wrapper stops at Target.
+                if (m_Kind != WrapperKind.Interface)
+                {
+                    w.Line();
+                    w.Line("public static implicit operator " + targetRef + "(" + name + " wrapper) => wrapper" + (isStruct ? "." : "?.") + WrapperSyntax.ValueField + ";");
+
+                    // Only a public type can be converted back from: its wrapper takes it as a parameter.
+                    if (t.IsVisible)
+                    {
+                        w.Line();
+                        w.Line("public static implicit operator " + name + "(" + targetRef + " value) => " + WrapperSyntax.WrapMethod + "(value);");
+                    }
+                }
             }
 
             w.Line();
@@ -193,16 +238,14 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             w.Line("public static bool operator !=(" + name + " left, " + name + " right) => (left == right) == false;");
         }
 
-        private string WrapExpression(string name)
+        private string WrapExpression(string name, Type t)
         {
-            switch (m_Kind)
-            {
-                case WrapperKind.Struct: return "new " + name + "(value)";
+            // Wrappers of public types never inherit one another, so they are not registered and construct directly.
+            if (m_Kind == WrapperKind.Struct) return "new " + name + "(value)";
+            if (m_Kind != WrapperKind.Class || t.IsVisible) return "value == null ? null : new " + name + "(value)";
 
-                // A public class between two internal ones makes the lower wrapper a root, so the registry can hand back a wrapper that is not a T.
-                case WrapperKind.Class: return "value == null ? null : " + WrapperSyntax.RegistryRef + "." + WrapperSyntax.WrapMethod + "(value) as " + name + " ?? new " + name + "(value)";
-                default: return "value == null ? null : new " + name + "(value)";
-            }
+            // A public class between two internal ones makes the lower wrapper a root, so the registry can hand back a wrapper that is not a T.
+            return "value == null ? null : " + WrapperSyntax.RegistryRef + "." + WrapperSyntax.WrapMethod + "(value) as " + name + " ?? new " + name + "(value)";
         }
 
         private string SameValue(string other) =>
