@@ -194,7 +194,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             var branch = Activator.CreateInstance(Wrapper("Branch"), new[] { point });
 
             Assert.AreEqual(9, Property("Point", "X").GetValue(Property("Branch", "Corner").GetValue(branch)));
-            Assert.AreEqual(9, Indexer("Holder", Wrapper("Point")).GetValue(Activator.CreateInstance(Wrapper("Holder")), new[] { point }));
+            Assert.AreEqual(9, Indexer("Grid", Wrapper("Point")).GetValue(Activator.CreateInstance(Wrapper("Grid")), new[] { point }));
         }
 
         [Test]

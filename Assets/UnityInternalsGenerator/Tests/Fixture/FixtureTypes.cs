@@ -39,7 +39,6 @@ namespace UnityInternalsFixture
     {
         internal static int StaticValue => 7;            // Wrapped
         internal int InstanceValue => 1;                 // Wrapped since step 2
-        internal int this[Point p] => p.X;               // index parameter of a wrapped type
         public static Holder operator +(Holder a, Holder b) => a; // Deferred (operator, step 3)
     }
 
@@ -50,6 +49,12 @@ namespace UnityInternalsFixture
         internal Point(int x) { X = x; }
         internal int Doubled => X * 2;
         internal int Shift(int by) => X + by;
+    }
+
+    /// <summary>Only an indexer, so selecting it pulls in exactly the wrapped type its index parameter needs.</summary>
+    internal class Grid
+    {
+        internal int this[Point p] => p.X;               // index parameter of a wrapped type
     }
 
     internal interface IThing

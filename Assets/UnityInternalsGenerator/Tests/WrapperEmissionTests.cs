@@ -292,12 +292,12 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         [Test]
         public void Selection_IndexerNeedingAWrappedType_AutoIncludesIt()
         {
-            var indexer = MemberId.Member(Fixture("Holder").GetProperties(c_Declared).Single(p => p.GetIndexParameters().Any(i => i.ParameterType == Fixture("Point"))));
+            var indexer = MemberId.Member(Fixture("Grid").GetProperties(c_Declared).Single(p => p.GetIndexParameters().Any(i => i.ParameterType == Fixture("Point"))));
             var result = WrapperGenerator.Generate(Input(new SelectionRules(new[] { indexer }, Array.Empty<string>())));
 
             Assert.AreEqual(WrapStatus.Wrapped, Entry(result, indexer).Status);
             Assert.AreEqual(indexer, result.Selection.AutoIncludedBy[MemberId.Type(Fixture("Point"))]);
-            AssertContainsLine(File(result, "WrappedUnityInternalsFixture/Holder.g.cs"), "        public int this[global::WrappedUnityInternalsFixture.Point p] => m_Value[(p).m_Value];");
+            AssertContainsLine(File(result, "WrappedUnityInternalsFixture/Grid.g.cs"), "        public int this[global::WrappedUnityInternalsFixture.Point p] => m_Value[(p).m_Value];");
         }
 
         [Test]

@@ -26,10 +26,10 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
         private static string MethodId(string type, string name) => MemberId.Member(Fixture(type).GetMethods(BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public).First(m => m.Name == name));
 
-        /// <summary>The Branch constructor and the Holder indexer that take a wrapped <c>Point</c>.</summary>
+        /// <summary>The Branch constructor and the Grid indexer that take a wrapped <c>Point</c>.</summary>
         private static string PointCtorId() => MemberId.Member(Fixture("Branch").GetConstructor(c_Declared, null, new[] { Fixture("Point") }, null));
 
-        private static string PointIndexerId() => MemberId.Member(Fixture("Holder").GetProperties(c_Declared).Single(p => p.GetIndexParameters().Any(i => i.ParameterType == Fixture("Point"))));
+        private static string PointIndexerId() => MemberId.Member(Fixture("Grid").GetProperties(c_Declared).Single(p => p.GetIndexParameters().Any(i => i.ParameterType == Fixture("Point"))));
 
         private static Catalog Build() => CatalogBuilder.Build(NewContext());
 
