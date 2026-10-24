@@ -284,13 +284,13 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
             TestContext.WriteLine($"[Perf] nodes={catalog.Nodes.Count} build={buildWatch.ElapsedMilliseconds}ms rows(gameview)={rows.Count} in {searchWatch.ElapsedMilliseconds}ms rows(Menu.AddMenuItem)={dotted.Count} in {dottedWatch.ElapsedMilliseconds}ms");
 
-            // Public type with internal members (U4): UnityEditor.Menu lists its internal AddMenuItem as Deferred.
+            // Public type with internal members (step 4): UnityEditor.Menu wraps its internal AddMenuItem.
             var menu = catalog.Get(MemberId.Type(typeof(UnityEditor.Menu)));
             Assert.IsNotNull(menu, "UnityEditor.Menu node");
-            Assert.AreEqual(WrapStatus.Deferred, menu.Status);
+            Assert.AreEqual(WrapStatus.Wrapped, menu.Status);
             var addMenuItem = catalog.ChildrenOf(menu.Id).FirstOrDefault(n => n.Name == "AddMenuItem");
             Assert.IsNotNull(addMenuItem, "AddMenuItem under UnityEditor.Menu");
-            Assert.AreEqual(WrapStatus.Deferred, addMenuItem.Status);
+            Assert.AreEqual(WrapStatus.Wrapped, addMenuItem.Status);
             Assert.IsTrue(dotted.Any(r => r.Id == addMenuItem.Id), "dotted search finds AddMenuItem");
             Assert.Less(dottedWatch.ElapsedMilliseconds, 200, "dotted search rows");
             Assert.Greater(catalog.Nodes.Count, 1000);

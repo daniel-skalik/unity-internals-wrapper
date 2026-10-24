@@ -243,6 +243,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             var reserved = Fixture("ReservedNames");
             var expected = new[]
             {
+                MemberId.Member(Fixture("PublicReserved").GetProperty("Target", c_Declared)),
                 MemberId.Type(Fixture("ReservedNested+Target")),
                 MemberId.Member(reserved.GetMethod("Wrap", c_Declared)),
                 MemberId.Member(reserved.GetProperty("Target", c_Declared)),

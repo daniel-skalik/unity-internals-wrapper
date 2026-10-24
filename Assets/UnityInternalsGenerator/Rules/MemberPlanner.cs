@@ -81,6 +81,10 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             return new MemberPlan(planned, verdicts);
         }
 
+        /// <summary>
+        /// Every member the wrapper of <paramref name="t"/> considers, in emission order. A public type contributes only its
+        /// accessible-internal members: its public ones are reachable without the wrapper, so they are not mirrored (step 4).
+        /// </summary>
         private static IEnumerable<MemberInfo> DeclaredMembers(Type t)
         {
             var properties = ByToken(t.GetProperties(c_Declared));
@@ -92,12 +96,32 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             var ctors = t.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly).Cast<MemberInfo>().ToList();
             if (t.TypeInitializer != null) ctors.Add(t.TypeInitializer);
 
-            return ByToken(t.GetFields(c_Declared)).Cast<MemberInfo>()
+            var all = ByToken(t.GetFields(c_Declared)).Cast<MemberInfo>()
                 .Concat(properties)
                 .Concat(events)
                 .Concat(ByToken(ctors))
                 .Concat(ByToken(t.GetMethods(c_Declared)).Where(m => accessors.Contains(m) == false));
+
+            return t.IsVisible ? all.Where(IsInternalMember) : all;
         }
+
+        /// <summary>
+        /// True when the host assembly can only reach the member because it is <c>internal</c> or <c>protected internal</c>.
+        /// These are the members a public type's wrapper exposes; <c>protected</c> and <c>private</c> wait for step 7.
+        /// </summary>
+        public static bool IsInternalMember(MemberInfo m)
+        {
+            switch (m)
+            {
+                case FieldInfo f: return f.IsAssembly || f.IsFamilyOrAssembly;
+                case PropertyInfo p: return p.GetAccessors(true).Any(IsInternalMethod);
+                case EventInfo e: return new[] { e.GetAddMethod(true), e.GetRemoveMethod(true), e.GetRaiseMethod(true) }.Any(a => a != null && IsInternalMethod(a));
+                case MethodBase method: return IsInternalMethod(method);
+                default: return false;
+            }
+        }
+
+        private static bool IsInternalMethod(MethodBase m) => m.IsAssembly || m.IsFamilyOrAssembly;
 
         private static List<T> ByToken<T>(IEnumerable<T> members) where T : MemberInfo => members.OrderBy(m => m.MetadataToken).ToList();
 

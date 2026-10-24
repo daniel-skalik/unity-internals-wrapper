@@ -213,13 +213,13 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
-        public void PublicTypeWithInternalMember_DeferredNode_ListsOnlyInternalMembers()
+        public void PublicTypeWithInternalMember_WrappedNode_ListsOnlyInternalMembers()
         {
             var catalog = Build();
             var api = catalog.Get(MemberId.Type(typeof(PublicApi)));
             Assert.IsNotNull(api);
-            Assert.AreEqual(WrapStatus.Deferred, api.Status);
-            Assert.AreEqual(CatalogBuilder.PublicTypeInternalMembersReason, api.Reason);
+            Assert.AreEqual(WrapStatus.Wrapped, api.Status);
+            Assert.IsNull(api.Reason);
             Assert.AreEqual(NodeKind.StaticClass, api.Kind);
             Assert.AreEqual(SelectionIds.Namespace("UnityInternalsFixture"), api.ParentId);
             Assert.IsTrue(api.IsType);
@@ -230,8 +230,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             var hidden = children.Single();
             Assert.AreEqual(MemberId.Member(typeof(PublicApi).GetMethod("Hidden", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)), hidden.Id);
             Assert.AreEqual(NodeKind.Method, hidden.Kind);
-            Assert.AreEqual(WrapStatus.Deferred, hidden.Status);
-            Assert.AreEqual(CatalogBuilder.PublicTypeInternalMembersReason, hidden.Reason);
+            Assert.AreEqual(WrapStatus.Wrapped, hidden.Status);
             Assert.AreEqual(0, hidden.DependencyTypeIds.Count);
         }
 
@@ -241,7 +240,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             var catalog = Build();
             var host = catalog.Get(MemberId.Type(typeof(PublicHost)));
             Assert.IsNotNull(host);
-            Assert.AreEqual(WrapStatus.Deferred, host.Status);
+            Assert.AreEqual(WrapStatus.Wrapped, host.Status);
             var inner = catalog.Get(MemberId.Type(typeof(PublicHost).GetNestedType("InnerMode", System.Reflection.BindingFlags.NonPublic)));
             Assert.AreEqual(host.Id, inner.ParentId);
             CollectionAssert.AreEqual(new[] { inner.Id }, catalog.ChildrenOf(host.Id).Select(n => n.Id).ToList());
@@ -254,13 +253,13 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
-        public void PublicTypeNodes_AreNeverEmitted()
+        public void PublicTypeNodes_AreEmitted()
         {
             var catalog = Build();
             var result = SelectionResolver.Resolve(catalog, SelectionRules.All);
-            CollectionAssert.DoesNotContain(result.EmittedTypeIds.ToList(), MemberId.Type(typeof(PublicApi)));
-            CollectionAssert.DoesNotContain(result.EmittedTypeIds.ToList(), MemberId.Type(typeof(PublicHost)));
-            Assert.IsFalse(result.EmittedMemberIds.Any(id => id.Contains("|UnityInternalsFixture.PublicApi|")));
+            CollectionAssert.Contains(result.EmittedTypeIds.ToList(), MemberId.Type(typeof(PublicApi)));
+            CollectionAssert.Contains(result.EmittedTypeIds.ToList(), MemberId.Type(typeof(PublicHost)));
+            Assert.IsTrue(result.EmittedMemberIds.Any(id => id.Contains("|UnityInternalsFixture.PublicApi|")));
         }
 
         [Test]

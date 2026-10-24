@@ -335,12 +335,44 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
-        public void Types_InternalNestedInPublicType_Deferred()
+        public void Types_InternalNestedInPublicType_Wrapped()
         {
             var inner = Fixture("PublicHost").GetNestedType("InnerMode", System.Reflection.BindingFlags.NonPublic);
-            var c = NewContext().Classify(inner);
-            Assert.AreEqual(WrapStatus.Deferred, c.Status);
-            StringAssert.Contains("PublicTypeInternalMembers (step 4)", c.Reason);
+            Assert.AreEqual(WrapStatus.Wrapped, NewContext().Classify(inner).Status);
+        }
+
+        [Test]
+        public void Types_PublicWithInternalMembers_WrappedByTheStep4Rule()
+        {
+            var ctx = NewContext();
+            foreach (var name in new[] { "PublicApi", "PublicHost", "PublicThing", "PublicSpot", "PublicOuter", "PublicDerived", "FixtureNode" })
+            {
+                AssertStatus(ctx, name, WrapStatus.Wrapped);
+                Assert.AreEqual("PublicTypeInternalMembers", ctx.Classify(Fixture(name)).RuleName, name);
+            }
+        }
+
+        [Test]
+        public void Types_PublicWithoutInternals_NotClassifiable()
+        {
+            var ctx = NewContext();
+            Assert.AreEqual(WrapStatus.Unsupported, ctx.Classify(typeof(FixtureMarker)).Status);
+            Assert.IsFalse(ctx.IsWrappedType(typeof(FixtureMarker)));
+            CollectionAssert.DoesNotContain(ctx.ClassifiedTypes.ToList(), typeof(FixtureMarker));
+        }
+
+        /// <summary>A public type keeps passing through signatures as itself, even once it has a wrapper of its own.</summary>
+        [Test]
+        public void Convert_PublicHost_StaysPassthrough()
+        {
+            var ctx = NewContext();
+            var c = ctx.Convert(Fixture("PublicThing"));
+
+            Assert.AreEqual(WrapStatus.Wrapped, c.Status);
+            Assert.AreEqual("global::UnityInternalsFixture.PublicThing", c.WrappedTypeRef);
+            Assert.AreEqual("x", c.ToWrapped("x"));
+            Assert.IsFalse(ctx.NeedsWrapper(Fixture("PublicThing")));
+            Assert.IsTrue(ctx.NeedsWrapper(Fixture("Point")));
         }
 
         [Test]

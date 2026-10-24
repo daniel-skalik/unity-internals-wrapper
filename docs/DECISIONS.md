@@ -49,7 +49,7 @@ Every decision made so far, who made it, and what it costs if wrong. Newest topi
 | B13 | Browser: IMGUI TreeView, search on names; dotted search (`UnityEditor.Toolbar`, `Toolbar.AddSubToolbar`) = last part matches name, prefix matches parent path on segment boundary | User / Claude | — |
 | B14 | Browser sorted A→Z case-insensitive, namespaces and types interleaved | User | — |
 | B15 | Expand matched containers while searching | User | — |
-| B16 | Public types with internal members listed as Deferred (step 4) so they can be ticked now | User | — |
+| B16 | Public types with internal members listed as Deferred (step 4) so they can be ticked now — superseded by section E | User | — |
 | B17 | Browser saves on every tick (no Save button) | Claude | more settings writes |
 | B18 | `SelectionRules.All` not editable (throws) | Claude | — |
 | B19 | Opening Browser never persists a changed host name | Claude | — |
@@ -81,3 +81,21 @@ Design: `docs/design/2026-10-24-step2-instance-wrappers-design.md`. Implements A
 | D12 | `RoslynProcessCompiler` takes an optional output directory it keeps, so tests can load the compiled wrappers and assert runtime behaviour | Claude | — |
 | D13 | Indexer ids carry their index parameter types (`…|Property|Item(Ns.T)`), so two indexers of one type stay distinct in the catalog, the selection and the report; non-indexer properties keep the bare `…|Property|<Name>` form, so persisted selections are unaffected | Claude | a persisted indexer selection from a pre-step-2 settings file would read as missing — no such selection can exist, indexers were never emitted before |
 | D14 | `Target` is reserved only on the shapes that declare it (class wrapper with a non-`object` public base, and the wrappers inheriting it); struct, interface and `object`-based class wrappers may wrap a member or nested type named `Target` | Claude | — |
+
+## E. Step 4 — internal members of public types (2026-10-24)
+
+Design: `docs/design/2026-10-24-step4-public-type-internals-design.md`. Implements §4/§8.4 of the generator design and retires B16.
+
+| # | Decision | By | Cost if wrong |
+|---|---|---|---|
+| E1 | Public types become **ordinary classified types** (`GenerationContext.IsClassifiable` admits them), so the catalog, report, member planner, resolver and Browser reach them through the paths they already use; `CatalogBuilder` loses its separate public-type path | Claude | one classification path carries two very different kinds of type |
+| E2 | A public type qualifies when it declares an accessible-internal member, **or** declares a non-visible nested type, **or** declares a public nested type that qualifies — the last two purely as containers | Claude | container-only hosts read `Wrapped` while generating nothing |
+| E3 | Including **private and protected** nested types in E2 is what fixes the known catalog issue "private/protected nested types of public types parented inconsistently": the container node now always exists | Claude | more `Wrapped` type entries in the report (645 in the CoreModules) |
+| E4 | Only accessible-internal members are mirrored (`internal`, `protected internal`); public members get no node, no verdict, no report entry. `protected`/`private` stay step 7 | Claude (per issue scope) | — |
+| E5 | One type rule `PublicTypeInternalMembers` placed first, whose generator dispatches by shape, instead of letting the four shape rules match public types — one rule name in the report for the whole case | Claude | the report does not say which shape was emitted |
+| E6 | `Target` on a public type's wrapper is **the type itself**, not its first public base, and struct and interface wrappers of public types declare it too (unlike D3/D14 for internal types) | Claude | an internal member named `Target` on a public type is `NameCollision` and unreachable |
+| E7 | The implicit conversion runs **both ways** for public class and struct wrappers; a public **interface** wrapper gets neither (C# forbids an interface as either operand of a user-defined conversion, CS0552) and exposes only `Target` | Claude | internal members of a public interface need `Target`, not a conversion |
+| E8 | **No hierarchy between wrappers of public types** — each is a root with its own `DeclaredOnly` members; a base type's internals live on the base type's wrapper, reachable in one step through the conversions | Claude | `WrappedUnityEditor.EditorWindow` does not inherit `ScriptableObject`'s wrapped internals |
+| E9 | Wrappers of public types are **not registered** in `WrapperRegistry` and their `Wrap` constructs directly: the registry exists for base-chain dispatch (D5), which E8 removes | Claude | `WrapperRegistry.Wrap(someUnityObject)` returns null for a public type that has a wrapper |
+| E10 | A public type in a signature stays **passthrough** (unchanged `PassthroughConversionRule` order), so wrapping it changes no other wrapper's API; and it is therefore not a selection dependency (`GenerationContext.NeedsWrapper` replaces `IsWrappedType` in `CatalogBuilder.Dependencies`) | Claude | the wrapper of a public type is never used as a parameter or return type |
+| E11 | The `using UnityEditor;` + `using WrappedUnityEditor;` ambiguity (CS0104) is **documented, not worked around**; a disambiguating suffix would break A3 | User (A2/A3), restated here | consumers must alias or qualify the most familiar Unity type names |

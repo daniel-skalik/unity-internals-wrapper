@@ -155,8 +155,9 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Pipeline
         /// </summary>
         private static GeneratedFile EmitRegistry(GenerationContext ctx)
         {
+            // Wrappers of public types are left out: they never inherit one another, so a registration could only return a wrapper the caller cannot use.
             var classes = ctx.ClassifiedTypes
-                .Where(t => t.IsClass && ctx.IsEmitted(t) && ctx.IsInstanceWrapper(t))
+                .Where(t => t.IsClass && t.IsVisible == false && ctx.IsEmitted(t) && ctx.IsInstanceWrapper(t))
                 .OrderBy(MemberId.Type, StringComparer.Ordinal)
                 .ToList();
             if (classes.Count == 0) return null;
