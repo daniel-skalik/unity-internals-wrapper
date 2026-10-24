@@ -28,20 +28,63 @@ The chosen host name is written back to the settings asset (`HostAssemblyName`).
 | Context | `Model/GenerationContext.cs` | Memoized type classification and member plans, conversions, report sink, file-path collision rejection, emitted-set filter (`ApplySelection`, `IsEmitted`) |
 | Selection | `Selection/` (`SelectionRules`, `CatalogBuilder`, `Catalog`, `CatalogNode`, `SelectionResolver`, `SelectionResult`, `SelectionEditing`) | Node tree of the classified input, allowlist rules, resolution to the emitted set, tri-state editing |
 | Browser | `Browser/BrowserModel.cs`, `Browser/UnityInternalsBrowserWindow.cs` | Search/filter rows (pure) and the IMGUI selection window |
-| Type rules | `Rules/TypeRules.cs`, `Rules/TypeClassification.cs` | Decide the status of each non-public type |
+| Type rules | `Rules/TypeRules.cs`, `Rules/TypeClassification.cs` | Decide the status of each non-public type, and emit it (enum mirror, static class, instance wrapper) |
 | Member rules | `Rules/MemberRules.cs`, `Rules/MemberPlanner.cs` | Per-member status, name collisions, parameter/default/`Caller*` attribute syntax |
-| Conversions | `Rules/ConversionRules.cs`, `Rules/Conversion.cs` | Maps internal types to wrapper types and casts |
+| Conversions | `Rules/ConversionRules.cs`, `Rules/Conversion.cs` | Maps internal types to wrapper types, casts, wraps/unwraps |
+| Wrapper shape | `Rules/WrapperSyntax.cs` | The names the instance wrappers own (`m_Value`, `Wrap`, `Target`) and the registry location |
 | Naming | `Naming/` (`NamingStrategies`, `NamespaceMapper`, `CSharpNames`, `DefaultValueFormatter`) | `Exact` or `PascalCase` member names; namespaces get a `Wrapped` prefix |
-| Emission | `Pipeline/WrapperGenerator.cs`, `Emit/CodeWriter.cs`, `Emit/GeneratedFile.cs` | One file per top-level wrapped type; each line is tagged with its owning member id |
+| Emission | `Pipeline/WrapperGenerator.cs`, `Emit/CodeWriter.cs`, `Emit/GeneratedFile.cs` | One file per top-level wrapped type plus the wrapper registry; each line is tagged with its owning member id |
 | Pre-compile | `Pipeline/RoslynProcessCompiler.cs`, `Pipeline/CompilerReferences.cs` | Out-of-project compile with the bundled Unity `dotnet` and `DotNetSdkRoslyn/csc.dll` (`-preferreduilang:en-US`, 10 min timeout, process-tree kill) |
 | Compile loop | `Pipeline/GenerationRunner.cs` | Maps compiler errors back to member/type ids through line owners, auto-excludes them, repeats up to `MaxCompilePasses` |
 | Output | `Output/OutputWriter.cs`, `Output/MetaFiles.cs`, `Output/ReportWriter.cs` | Writes only changed files, deterministic `.meta`, deletes stale files, report md/json |
 
 `WrapperGenerator.Generate` is pure (no I/O): classify all, reject path collisions, `CatalogBuilder.Build`, `SelectionResolver.Resolve`, `GenerationContext.ApplySelection`, emit one file per emitted top-level type. Top-level types whose generated paths collide case-insensitively are all dropped and reported `NameCollision` with reason `file path collision: <path>` (`CollidingGroups`, `GenerationContext.RejectPathCollision`); this runs over all wrapped top-level types before the catalog is built (member plans are memoized lazily and must see final classifications), so colliding types are rejected even when not selected. `WrapperGenerator.BuildCatalog(input)` runs the same steps up to the catalog without resolving or emitting (used by the Browser).
 
+## Wrappers for instance types
+
+Internal classes, structs and interfaces become public wrappers holding the real value in an `internal` field `m_Value`
+(`Rules/TypeRules.cs`: `WrapperTypeGenerator`, kinds `Class`/`Struct`/`Interface`; the rules are `InstanceClassTypeRule`,
+`StructTypeRule`, `InterfaceTypeRule`, with `StaticClassTypeRule` matching only `abstract sealed` classes and
+`ClassTypeGenerator` emitting those). Every wrapper also declares `internal static T Wrap(<unity type>)` — internal,
+because a public member may not expose an internal type (CS0051).
+
+- **Hierarchy** (class wrappers only): `GenerationContext.WrapperBase` walks the internal base chain and stops at the
+  first `IsVisible` base; an emitted internal base found first becomes the wrapper's base (unemitted internal bases are
+  skipped). A root wrapper exposes that first public base — unless it is `object`, where a user-defined conversion would
+  be illegal — as `public Target` plus an implicit conversion (`GenerationContext.PublicBase`). Every level declares its
+  own `m_Value` typed to its own internal type (`internal new readonly …` below the root) and chains `: base(value)`, so
+  member access and unwrapping need no casts.
+- **Equality** lives on the root wrapper: `Equals(object)`, `GetHashCode()`, `==`/`!=` by underlying instance for
+  classes and interfaces, by underlying value for structs. `Wrap(null)` is `null`, so `wrapper == null` reads like the
+  original reference.
+- **Central Wrap**: `WrappedRuntime/WrapperRegistry.g.cs` (names in `Rules/WrapperSyntax.cs`) holds one
+  `Dictionary<Type, Func<object, object>>` factory per emitted class wrapper, keyed by the exact Unity type;
+  `public static object Wrap(object)` walks the runtime type's base chain and so returns the most-derived wrapper
+  available, which makes `as`/`is` behave. Registrations are split into `AddNN(map)` chunks of 200, ordinal-sorted by
+  type id, and each line is attributed to its type id so the compile loop can auto-exclude a type that breaks its own
+  registration. The file is omitted when no class wrapper is emitted. A per-wrapper `Wrap` falls back to
+  `new T(value)` when the registry returns a wrapper that is not a `T` (a public class between two internal ones makes
+  the lower wrapper a root).
+- **Structs** keep a mutable `m_Value`, so instance field setters write through, and are passed by value (no boxing).
+- **Interfaces** become wrapper *classes* over the interface value — no mirrored interface, no `Target`, no registry
+  entry (the runtime type is an implementation class) — so `Wrap` constructs directly. Only members the interface itself
+  declares are emitted.
+- **Conversions**: `WrapperConversionRule` matches any `GenerationContext.IsInstanceWrapper` type and produces
+  `global::WrappedNs.T.Wrap(expr)` inbound and `(expr)?.m_Value` (`(expr).m_Value` for structs) outbound.
+- **Members**: instance fields, properties and methods read through `m_Value` instead of the Unity type
+  (`MemberSyntax.Owner`) and drop `static`. `ConstructorMemberRule` emits
+  `public T(<params>) : this(new global::Ns.T(<args>)) { }`; `IndexerMemberRule` emits `this[…]` over `m_Value[…]`.
+  A member that repeats a name (and, where overloadable, a signature) an emitted wrapper base declares gets `new`
+  (`GenerationContext.HidesWrapperBaseMember`). The names a wrapper declares itself (`m_Value`, `Wrap`, `Target`,
+  `Equals`, `GetHashCode`) are reserved: an otherwise wrapped member with that name is `NameCollision` with reason
+  `Name reserved by the wrapper '<name>'`. Constructors and indexers carry no member name, so they collide only on an
+  identical emitted signature.
+- Constructors of abstract types are `Deferred` (`Inheritable (step 6)`) because the wrapper calls the real
+  constructor; a parameterless struct constructor is `Unsupported`.
+
 ## Statuses
 
-`WrapStatus`: `Wrapped`, `Deferred` (planned later: structs, interfaces, delegates, instance members, events, operators, generic methods), `Unsupported`, `Excluded` (`AutoExclusion`, compiler-generated, obsolete-error, static ctor, nested in an excluded type; selection never produces it), `NotAccessible`, `NoBridgeAccess` (id `<Assembly>|*`), `NameCollision`, `CompileFailed` (auto-excluded after pre-compile; reason is `<Code>: <Message>`), `SelectedMissing` (report-only: a selection rule id absent from the current Unity). Nested types hidden by an auto-excluded type read `Declaring type auto-excluded: failed to compile`. Auto-excludes are never persisted.
+`WrapStatus`: `Wrapped`, `Deferred` (planned later: delegates, events, operators, generic methods, arrays/collections/`Nullable`, `ref`/`out`, generic parameters, internal members of public types, constructors of inheritable types), `Unsupported`, `Excluded` (`AutoExclusion`, compiler-generated, obsolete-error, static ctor, nested in an excluded type; selection never produces it), `NotAccessible`, `NoBridgeAccess` (id `<Assembly>|*`), `NameCollision`, `CompileFailed` (auto-excluded after pre-compile; reason is `<Code>: <Message>`), `SelectedMissing` (report-only: a selection rule id absent from the current Unity). Nested types hidden by an auto-excluded type read `Declaring type auto-excluded: failed to compile`. Auto-excludes are never persisted.
 
 Ids: `Assembly|Namespace.Outer+Inner|Kind|Name(ParamType,...)` (`Model/MemberId.cs`; type ids are `Assembly|Namespace.Outer+Inner|Type|Inner`). Namespace node ids are `ns:<FullNamespace>` (assembly-agnostic; global namespace `ns:`), built by `SelectionIds.Namespace`; the parent of `ns:A.B` is `ns:A`, a top-level namespace has no parent.
 
@@ -49,7 +92,7 @@ Ids: `Assembly|Namespace.Outer+Inner|Kind|Name(ParamType,...)` (`Model/MemberId.
 
 Classification is selection-agnostic; the selection only decides what is emitted.
 
-- **Catalog** (`Selection/CatalogBuilder.cs`, `Catalog.cs`, `CatalogNode.cs`): one node per namespace, classified type (compiler-generated types omitted) and considered member (`GenerationContext.MemberVerdicts`; members only under `Wrapped` non-enum types). A nested type's parent is its declaring type when that has a node, otherwise its namespace. Each member node carries the ids of the wrapped internal types its signature needs (`DependencyTypeIds`). Siblings (`Catalog.ChildrenOf`) form one list sorted by name `OrdinalIgnoreCase`, ties by kind (namespace, type, member) then id ordinal, so namespaces and types interleave.
+- **Catalog** (`Selection/CatalogBuilder.cs`, `Catalog.cs`, `CatalogNode.cs`): one node per namespace, classified type (compiler-generated types omitted) and considered member (`GenerationContext.MemberVerdicts`; members only under `Wrapped` non-enum types). `NodeKind` covers `Namespace`, `Class`, `StaticClass`, `Struct`, `Interface`, `Enum`, `Method`, `Constructor`, `Property`, `Indexer`, `Field`, `Const`, `Other` (the Browser only prints the kind). A nested type's parent is its declaring type when that has a node, otherwise its namespace. Each member node carries the ids of the wrapped internal types its signature needs (`DependencyTypeIds`: return/field/property type, method, constructor and indexer parameters). A wrapper's base is not a dependency — the base-chain walk skips unemitted internal bases, so the wrapper compiles on its own. Siblings (`Catalog.ChildrenOf`) form one list sorted by name `OrdinalIgnoreCase`, ties by kind (namespace, type, member) then id ordinal, so namespaces and types interleave.
 - **Public types with internal members:** for each source assembly, every public (`IsVisible`), non-compiler-generated type that declares (`DeclaredOnly`) an accessible-internal member (method/ctor `IsAssembly`/`IsFamilyOrAssembly`, property/event with such an accessor, field `IsAssembly`/`IsFamilyOrAssembly`) gets a type node with status `Deferred`, reason `PublicTypeInternalMembers (step 4)` (`CatalogBuilder.PublicTypeInternalMembersReason`), and one `Deferred` member node (same reason, no dependencies) per such member (accessor methods, static ctors and compiler-generated members skipped). Public declaring types of internal nested catalog types and of such public types also get a (possibly memberless) `Deferred` node, so internal types nested in public types (for example `PublicHost+InnerMode`) sit under their public declaring type. These nodes are never `Wrapped`, so the resolver never emits them; they produce no report entries. Example: `UnityEditor.Menu` lists `AddMenuItem`.
 - **Rules** (`Selection/SelectionRules.cs`): two normalized id lists, `Included` and `Excluded` (exceptions). `IsSelected` walks the id and its ancestors; the first (deepest) rule found decides; no rule means not selected. Including a namespace or type selects everything beneath it, including members and nested types that appear in later Unity versions. `SelectionRules.All` selects everything (tests, Browser catalog build) and is not editable; `IsEmpty` is true when there are no `Included` ids.
 - **Resolution** (`Selection/SelectionResolver.cs` -> `SelectionResult`): emitted members = selected `Wrapped` members; emitted types = selected `Wrapped` enums, plus every type an emitted member's signature needs, plus the declaring-type containers of all emitted members and types. A type needed by an emitted member is emitted even when unticked or excepted (dependency beats exception iff needed); it is not emitted when nothing needs it. Selection exceptions never mark anything `Excluded`, and dependency need never resurrects a `CompileFailed` (auto-excluded) type or member; the cascade is reported. `AutoIncludedBy` maps each emitted-but-unselected type to the ordinal-smallest requiring id (a member or a type id). `MissingIds` = rule ids (included or excepted) absent from the catalog. `EmittedFileCount` = emitted top-level types.
@@ -87,7 +130,7 @@ Run `Tools/DandaUtils/Unity Internals/Generate`. On pre-compile failure nothing 
 
 ## Output files
 
-`_GenerationReport.md` and `_GenerationReport.json` (every considered type/member with its real status, reason and `selected` flag, plus one entry per missing rule id: `SelectedMissing` with reason `selected id not found in current Unity` or, for a missing exception id, `exception id not found in current Unity`; but when the id is a member whose declaring type is in the catalog and not `Wrapped` (its members vanished, e.g. after a compile auto-exclusion), the entry is `Excluded`, selected, reason `Declaring type auto-excluded: failed to compile` (declaring chain auto-excluded) or `Declaring type is <Status>` (`WrapperGenerator.MissingEntry`, `MemberId.DeclaringTypeId`)). The json lists only selected entries plus a top-level `notSelectedCount`; the md is unaffected. `selected` is true when the selection picks the id or the id is auto-included (an auto-included entry without a reason reads `auto-included: needed by <id>`); catalog-absent compiler-generated entries are never selected; `CompileFailed` entries always read selected (only emitted ids reach the compiler). The md count table (`ReportWriter.StatusCounts`, also used by the console summary of `GenerationCommand`) counts selected entries per status plus a `NotSelected` row, and the md per-status sections list only selected entries, `GenerationInfo.json` (`generatorVersion`, `unityVersion`, `host`), `WrappedUnityInternals.asmdef`, and `<WrappedNamespace>/<Type>.g.cs`.
+`_GenerationReport.md` and `_GenerationReport.json` (every considered type/member with its real status, reason and `selected` flag, plus one entry per missing rule id: `SelectedMissing` with reason `selected id not found in current Unity` or, for a missing exception id, `exception id not found in current Unity`; but when the id is a member whose declaring type is in the catalog and not `Wrapped` (its members vanished, e.g. after a compile auto-exclusion), the entry is `Excluded`, selected, reason `Declaring type auto-excluded: failed to compile` (declaring chain auto-excluded) or `Declaring type is <Status>` (`WrapperGenerator.MissingEntry`, `MemberId.DeclaringTypeId`)). The json lists only selected entries plus a top-level `notSelectedCount`; the md is unaffected. `selected` is true when the selection picks the id or the id is auto-included (an auto-included entry without a reason reads `auto-included: needed by <id>`); catalog-absent compiler-generated entries are never selected; `CompileFailed` entries always read selected (only emitted ids reach the compiler). The md count table (`ReportWriter.StatusCounts`, also used by the console summary of `GenerationCommand`) counts selected entries per status plus a `NotSelected` row, and the md per-status sections list only selected entries, `GenerationInfo.json` (`generatorVersion`, `unityVersion`, `host`), `WrappedUnityInternals.asmdef`, `<WrappedNamespace>/<Type>.g.cs`, and `WrappedRuntime/WrapperRegistry.g.cs` when any class wrapper is emitted.
 
 ## Determinism
 
@@ -95,7 +138,10 @@ Types sorted by FullName ordinal, members by metadata token, entries by id then 
 
 ## Known caveats
 
-- Struct-typed static fields: the wrapper property returns a copy; writes to struct members through it do not reach the original.
+- Struct-typed fields (static and instance): the wrapper property returns a copy; writes to struct members through it do not reach the original.
+- Internal interfaces are wrapper classes, so consumers cannot implement them (that is step 6), and members a derived interface inherits are not re-emitted on its wrapper.
+- Members of internal instance types named `m_Value`, `Wrap`, `Target`, `Equals` or `GetHashCode` are dropped as `NameCollision` rather than renamed.
+- A class wrapper stores one reference per hierarchy level (`m_Value` per level).
 - `using UnityEditor;` together with `using WrappedUnityEditor;` makes same-named types ambiguous; qualify or alias.
 - About 15 types end `CompileFailed` because their signatures reference Bee/Cecil assemblies that are not in the reference set.
 - `Caller*` attributes are copied onto wrapper parameters, so the caller info reflects the wrapper caller.

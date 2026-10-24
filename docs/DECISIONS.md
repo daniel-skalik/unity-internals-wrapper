@@ -60,3 +60,22 @@ Every decision made so far, who made it, and what it costs if wrong. Newest topi
 |---|---|---|
 | C1 | Separate from DandaUtils into this repo; for now moved **as is** (no UPM package, no renames). Further work happens here | User |
 | C2 | Proposed (not done): rename to `WrappedUnityInternals` (namespace, asmdefs, menus `Tools/Wrapped Unity Internals/…`, settings file), UPM package `com.danielskalik.wrappedunityinternals` | User named it; rest pending |
+
+## D. Step 2 — instance class, struct and interface wrappers (2026-10-24)
+
+Design: `docs/design/2026-10-24-step2-instance-wrappers-design.md`. Implements A6/A7/A8.
+
+| # | Decision | By | Cost if wrong |
+|---|---|---|---|
+| D1 | Every wrapper level declares its **own** `m_Value` typed to its own internal type (`internal new readonly …` below the root) and chains `: base(value)`, instead of casting a single root field | Claude | one stored reference per hierarchy level |
+| D2 | A wrapper's `Wrap(<unity type>)` is `internal` (a public member may not expose an internal type, CS0051); the single public entry point is the generated `WrappedRuntime.WrapperRegistry.Wrap(object)` | Claude | — |
+| D3 | `Target` + implicit conversion only when the first public base is not `object` (C# forbids a user-defined conversion to a base class, and `object` is reachable anyway) | Claude | — |
+| D4 | **Internal interface → wrapper class**, not a mirrored public interface: the Unity type could not implement a mirror, so values would need adapters in both directions and the "consumer implements it" direction is the inheritable-proxy work of step 6 | Claude | consumers cannot implement internal interfaces until step 6; a mirror would be a breaking change later |
+| D5 | Registry keyed by the **exact** runtime type, walking the base chain, so `Wrap` returns the most-derived wrapper available; a per-wrapper `Wrap` falls back to `new T(value)` when the registry hands back a non-`T` (a public class between two internal ones makes the lower wrapper a root) | Claude | — |
+| D6 | Registry registrations split into `AddNN(map)` chunks of 200, ordinal-sorted, each line attributed to its type id so the compile loop can auto-exclude it | Claude | — |
+| D7 | A derived wrapper that repeats a member of an emitted wrapper base emits it with `new` rather than dropping it (both forward to the same virtual call) | Claude | duplicated API surface per level |
+| D8 | `m_Value`, `Wrap`, `Target`, `Equals`, `GetHashCode` are reserved on instance wrappers: a wrapped member with that name becomes `NameCollision`, it is not renamed | Claude | 82 members of the CoreModules unreachable |
+| D9 | Constructors of abstract types → `Deferred` "Inheritable (step 6)"; a parameterless struct constructor → `Unsupported` | Claude | — |
+| D10 | Struct wrappers hold a **mutable** `m_Value` so instance field setters write through; equality compares the underlying value | Claude | — |
+| D11 | Only members an interface itself declares are emitted (`DeclaredOnly`, as for classes) | Claude | inherited interface members unreachable |
+| D12 | `RoslynProcessCompiler` takes an optional output directory it keeps, so tests can load the compiled wrappers and assert runtime behaviour | Claude | — |
