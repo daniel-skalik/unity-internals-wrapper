@@ -87,6 +87,12 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
             return null;
         }
 
+        /// <summary>
+        /// True when the type's wrapper declares <see cref="Rules.WrapperSyntax.TargetProperty"/>, or inherits it from the wrapper it derives from:
+        /// only a class wrapper does, and only when a public base other than <see cref="object"/> comes up its base chain.
+        /// </summary>
+        public bool DeclaresTarget(Type t) => t != null && t.IsClass && PublicBase(t) != null;
+
         /// <summary>True when the member's emitted shape repeats a name (and, where overloadable, a signature) an emitted wrapper base already declares, so it needs <c>new</c>.</summary>
         public bool HidesWrapperBaseMember(MemberInfo m)
         {
@@ -237,7 +243,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Model
                 if (declaringStatus != WrapStatus.Wrapped) return new TypeClassification(WrapStatus.Deferred, "NestedInUnwrappedType", "Declaring type is " + declaringStatus);
 
                 var nestedName = CSharpNames.TypeDeclName(t);
-                if (IsInstanceWrapper(declaring) && WrapperSyntax.IsReserved(nestedName)) return new TypeClassification(WrapStatus.NameCollision, "ReservedName", "Name reserved by the wrapper '" + nestedName + "'");
+                if (IsInstanceWrapper(declaring) && WrapperSyntax.IsReserved(nestedName, DeclaresTarget(declaring))) return new TypeClassification(WrapStatus.NameCollision, "ReservedName", "Name reserved by the wrapper '" + nestedName + "'");
             }
 
             if (t.IsEnum == false && typeof(Delegate).IsAssignableFrom(t)) return new TypeClassification(WrapStatus.Deferred, "Delegate", "Delegate wrapper (step 3)");

@@ -181,6 +181,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             var typeName = CSharpNames.TypeDeclName(t);
             var nestedNames = new HashSet<string>(t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).Where(ctx.IsWrappedType).Select(CSharpNames.TypeDeclName), StringComparer.Ordinal);
             var isInstanceWrapper = ctx.IsInstanceWrapper(t);
+            var declaresTarget = ctx.DeclaresTarget(t);
             var wrapped = candidates.Where(c => c.Verdict.Status == WrapStatus.Wrapped).ToList();
 
             foreach (var group in wrapped.Where(c => HasOwnName(c.Member) == false)
@@ -194,7 +195,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
             {
                 var name = group.Key;
                 var members = group.ToList();
-                if (isInstanceWrapper && WrapperSyntax.IsReserved(name))
+                if (isInstanceWrapper && WrapperSyntax.IsReserved(name, declaresTarget))
                 {
                     Collide(members, "Name reserved by the wrapper '" + name + "'");
                     continue;

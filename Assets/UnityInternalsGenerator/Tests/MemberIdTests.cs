@@ -1,5 +1,6 @@
 namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 {
+    using System.Linq;
     using System.Reflection;
     using DandaUtils.Editor.UnityInternalsGenerator.Model;
     using NUnit.Framework;
@@ -47,6 +48,18 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             Assert.AreEqual(Asm + "|UnityInternalsFixture.StaticApi|Field|Counter", MemberId.Member(StaticApi.GetField("Counter", f)));
             Assert.AreEqual(Asm + "|UnityInternalsFixture.StaticApi|Property|Current", MemberId.Member(StaticApi.GetProperty("Current", f)));
             Assert.AreEqual(Asm + "|UnityInternalsFixture.StaticApi|Method|Reset()", MemberId.Member(StaticApi.GetMethod("Reset", f)));
+        }
+
+        [Test]
+        public void Indexers_Ids_CarryTheirIndexParameters()
+        {
+            const BindingFlags f = BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+            var assembly = typeof(FixtureMarker).Assembly;
+            var indexers = assembly.GetType("UnityInternalsFixture.Grid", true).GetProperties(f);
+            var point = assembly.GetType("UnityInternalsFixture.Point", true);
+
+            Assert.AreEqual(Asm + "|UnityInternalsFixture.Grid|Property|Item(System.Int32)", MemberId.Member(indexers.Single(p => p.GetIndexParameters()[0].ParameterType == typeof(int))));
+            Assert.AreEqual(Asm + "|UnityInternalsFixture.Grid|Property|Item(UnityInternalsFixture.Point)", MemberId.Member(indexers.Single(p => p.GetIndexParameters()[0].ParameterType == point)));
         }
 
         [Test]

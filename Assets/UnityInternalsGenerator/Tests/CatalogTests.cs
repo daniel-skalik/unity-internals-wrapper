@@ -124,6 +124,22 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void Member_TwoIndexersOnOneType_AreSeparateNodesWithTheirOwnDependencies()
+        {
+            var catalog = Build();
+            var grid = Fixture("Grid");
+            var byPoint = catalog.Get(PointIndexerId());
+            var byInt = catalog.Get(MemberId.Member(grid.GetProperties(c_Declared).Single(p => p.GetIndexParameters()[0].ParameterType == typeof(int))));
+
+            Assert.IsNotNull(byPoint, "indexer taking a Point");
+            Assert.IsNotNull(byInt, "indexer taking an int");
+            Assert.AreNotEqual(byPoint.Id, byInt.Id);
+            CollectionAssert.AreEquivalent(new[] { MemberId.Type(Fixture("Point")) }, byPoint.DependencyTypeIds);
+            Assert.AreEqual(0, byInt.DependencyTypeIds.Count);
+            Assert.AreEqual(2, catalog.ChildrenOf(MemberId.Type(grid)).Count(n => n.Kind == NodeKind.Indexer));
+        }
+
+        [Test]
         public void Member_Dependencies_FieldAndMethodSignatures()
         {
             var catalog = Build();

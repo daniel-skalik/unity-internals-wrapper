@@ -219,6 +219,18 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void ReservedNames_TargetIsFreeOnShapesThatDoNotDeclareIt()
+        {
+            var result = Generate();
+
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, MemberId.Member(Fixture("Spot").GetField("Target", c_Declared))).Status);
+            Assert.AreEqual(WrapStatus.Wrapped, Entry(result, MemberId.Type(Fixture("Unreserved+Target"))).Status);
+
+            AssertContainsLine(File(result, "WrappedUnityInternalsFixture/Spot.g.cs"), "        public int Target { get => m_Value.Target; set => m_Value.Target = value; }");
+            StringAssert.Contains("enum Target", File(result, "WrappedUnityInternalsFixture/Unreserved.g.cs").Content);
+        }
+
+        [Test]
         public void RefStruct_IsUnsupported_AndEmitsNothing()
         {
             var result = Generate();

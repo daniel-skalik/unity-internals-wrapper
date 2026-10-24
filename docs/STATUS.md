@@ -2,7 +2,7 @@
 
 ## What exists
 - `Assets/UnityInternalsGenerator/` — full generator source, moved unchanged from s1-new (`Assets/DandaUtils/Editor/UnityInternalsGenerator/`). Still named `DandaUtils.*` (namespaces, asmdefs, menus `Tools/DandaUtils/Unity Internals/…`, settings page `Project/DandaUtils/…`, settings file `ProjectSettings/UnityInternalsGeneratorSettings.asset`, meta GUID seed `DandaUtils.UnityInternalsGenerator:`).
-- Tests: `Assets/UnityInternalsGenerator/Tests/` (241 EditMode tests, all passing; plus one `[Explicit]` real run over the CoreModules. Fixture assembly `Tests/Fixture` with IVT to `Wrapped.Fixture.Host`; `WrapperRuntimeTests` compiles the fixture wrappers with the bundled Roslyn, loads the DLL and exercises them).
+- Tests: `Assets/UnityInternalsGenerator/Tests/` (253 EditMode tests, all passing; plus one `[Explicit]` real run over the CoreModules. Fixture assembly `Tests/Fixture` with IVT to `Wrapped.Fixture.Host`; `WrapperRuntimeTests` compiles the fixture wrappers with the bundled Roslyn, loads the DLL and exercises them).
 - Docs: `docs/ENGINEERING.md` (how the code works), `docs/DECISIONS.md`, `docs/design/*`, `docs/plans/*`.
 
 ## To compile/test
@@ -45,7 +45,7 @@ Source is plain Unity editor code — it must sit inside a Unity project's `Asse
 - csc `WaitForExit` has a 10-min timeout but no test; failure-path report marks still-present members CompileFailed.
 - Struct-typed static fields and struct-typed instance fields return copies (documented).
 - Internal interfaces are wrapper classes, so consumers cannot implement them (step 6), and inherited interface members are not re-emitted on a derived interface's wrapper.
-- Members of internal instance types named `m_Value`/`Wrap`/`Target`/`Equals`/`GetHashCode` are dropped as `NameCollision` instead of renamed (82 in the CoreModules).
+- Members of internal instance types named `m_Value`/`Wrap`/`Equals`/`GetHashCode`, and `Target` on the shapes that declare it (a class wrapper with a non-`object` public base, and the wrappers inheriting it), are dropped as `NameCollision` instead of renamed (82 in the CoreModules).
 - A class wrapper stores one reference per hierarchy level.
 - `using UnityEditor;` + `using WrappedUnityEditor;` together → ambiguous names (accepted by design).
 - Some test hygiene: duplicated FakeCompiler/LineOf helpers, a few weak assertions.

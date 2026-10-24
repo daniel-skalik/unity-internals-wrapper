@@ -23,7 +23,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
 
         private static readonly string[] s_ReservedNames = { ValueField, WrapMethod, TargetProperty, "Equals", "GetHashCode" };
 
-        /// <summary>Names a wrapped member may not take on an instance wrapper, because the wrapper declares them.</summary>
+        /// <summary>Names a wrapped member may not take on an instance wrapper, because the wrapper declares them. <see cref="TargetProperty"/> only where the shape declares it.</summary>
         public static IReadOnlyList<string> ReservedNames => s_ReservedNames;
 
         public static string RegistryRef => "global::" + RegistryNamespace + "." + RegistryType;
@@ -33,6 +33,14 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Rules
         /// <summary>Unwrapping suffix: value types are never null, reference types unwrap through <c>?.</c>.</summary>
         public static string UnwrapSuffix(bool isValueType) => isValueType ? ")." + ValueField : ")?." + ValueField;
 
-        public static bool IsReserved(string name) => Array.IndexOf(s_ReservedNames, name) >= 0;
+        /// <summary>
+        /// True when the wrapper declares the name itself, so a wrapped member or nested type may not take it.
+        /// <see cref="TargetProperty"/> counts only when the emitted shape really declares it (<see cref="Model.GenerationContext.DeclaresTarget"/>).
+        /// </summary>
+        public static bool IsReserved(string name, bool declaresTarget)
+        {
+            if (declaresTarget == false && name == TargetProperty) return false;
+            return Array.IndexOf(s_ReservedNames, name) >= 0;
+        }
     }
 }

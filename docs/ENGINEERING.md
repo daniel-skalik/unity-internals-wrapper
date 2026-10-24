@@ -77,10 +77,13 @@ because a public member may not expose an internal type (CS0051).
   A member that repeats a name (and, where overloadable, a signature) an emitted wrapper base declares gets `new`
   (`GenerationContext.HidesWrapperBaseMember`). The names a wrapper declares itself (`m_Value`, `Wrap`, `Target`,
   `Equals`, `GetHashCode`) are reserved: an otherwise wrapped member with that name is `NameCollision` with reason
-  `Name reserved by the wrapper '<name>'`. Constructors and indexers carry no member name, so they collide only on an
-  identical emitted signature. A wrapped nested type of an instance wrapper is checked against the same reserved names
-  (`GenerationContext.ClassifyCore`), so `internal enum Target` inside an internal class is `NameCollision` instead of a
-  nested type that duplicates the wrapper's own `Target`.
+  `Name reserved by the wrapper '<name>'`. `Target` counts only where the emitted shape really declares it
+  (`WrapperSyntax.IsReserved(name, declaresTarget)` with `GenerationContext.DeclaresTarget`: a class wrapper with a
+  public base other than `object`, including the wrappers that inherit it); on a struct wrapper, an interface wrapper or
+  a class wrapper over `object` the name stays free. Constructors and indexers carry no member name, so they collide
+  only on an identical emitted signature. A wrapped nested type of an instance wrapper is checked against the same
+  reserved names (`GenerationContext.ClassifyCore`), so `internal enum Target` inside an internal class that derives
+  from a public base is `NameCollision` instead of a nested type that duplicates the wrapper's own `Target`.
 - Constructors of abstract types are `Deferred` (`Inheritable (step 6)`) because the wrapper calls the real
   constructor; a parameterless struct constructor is `Unsupported`.
 - **`ref struct`s** (`GenerationContext.IsByRefLike`) are `Unsupported` with reason `ref struct` before any type rule
@@ -91,7 +94,7 @@ because a public member may not expose an internal type (CS0051).
 
 `WrapStatus`: `Wrapped`, `Deferred` (planned later: delegates, events, operators, generic methods, arrays/collections/`Nullable`, `ref`/`out`, generic parameters, internal members of public types, constructors of inheritable types), `Unsupported` (pointers, `TypedReference`, `ref struct`, generic type definitions, parameterless struct constructors, `VarArgs`, unformattable const values, no rule matched), `Excluded` (`AutoExclusion`, compiler-generated, obsolete-error, static ctor, nested in an excluded type; selection never produces it), `NotAccessible`, `NoBridgeAccess` (id `<Assembly>|*`), `NameCollision`, `CompileFailed` (auto-excluded after pre-compile; reason is `<Code>: <Message>`), `SelectedMissing` (report-only: a selection rule id absent from the current Unity). Nested types hidden by an auto-excluded type read `Declaring type auto-excluded: failed to compile`. Auto-excludes are never persisted.
 
-Ids: `Assembly|Namespace.Outer+Inner|Kind|Name(ParamType,...)` (`Model/MemberId.cs`; type ids are `Assembly|Namespace.Outer+Inner|Type|Inner`). Namespace node ids are `ns:<FullNamespace>` (assembly-agnostic; global namespace `ns:`), built by `SelectionIds.Namespace`; the parent of `ns:A.B` is `ns:A`, a top-level namespace has no parent.
+Ids: `Assembly|Namespace.Outer+Inner|Kind|Name(ParamType,...)` (`Model/MemberId.cs`; type ids are `Assembly|Namespace.Outer+Inner|Type|Inner`). Methods, constructors and indexers carry their parameter types, so the two indexers of one type (both named `Item`) get different ids; a non-indexer property is `…|Property|<Name>` with no parentheses. Namespace node ids are `ns:<FullNamespace>` (assembly-agnostic; global namespace `ns:`), built by `SelectionIds.Namespace`; the parent of `ns:A.B` is `ns:A`, a top-level namespace has no parent.
 
 ## Selection
 

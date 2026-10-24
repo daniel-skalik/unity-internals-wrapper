@@ -22,6 +22,7 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
 
         private static Assembly s_Wrappers;
         private static Assembly s_Fixture;
+        private static string s_OutputDir;
 
         [OneTimeSetUp]
         public void CompileAndLoadWrappers()
@@ -29,12 +30,27 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
             s_Fixture = typeof(FixtureMarker).Assembly;
             var input = new GenerationInput(new[] { s_Fixture }, c_Host, NamingStyle.Exact, null, "test");
             var files = WrapperGenerator.Generate(input).Files;
-            var dir = Path.Combine(Path.GetTempPath(), "UnityInternalsGeneratorRuntime", Guid.NewGuid().ToString("N")).Replace('\\', '/');
+            s_OutputDir = Path.Combine(Path.GetTempPath(), "UnityInternalsGeneratorRuntime", Guid.NewGuid().ToString("N")).Replace('\\', '/');
 
-            var diagnostics = new RoslynProcessCompiler(dir).Compile(files, c_Host, CompilerReferences.Collect(input.Sources));
+            var diagnostics = new RoslynProcessCompiler(s_OutputDir).Compile(files, c_Host, CompilerReferences.Collect(input.Sources));
 
             Assert.AreEqual(0, diagnostics.Count(d => d.IsError), string.Join("\n", diagnostics.Where(d => d.IsError).Select(d => d.File + "(" + d.Line + "): " + d.Code + ": " + d.Message)));
-            s_Wrappers = Assembly.LoadFrom(dir + "/" + c_Host + ".dll");
+
+            // Loaded from bytes, so the dll stays unlocked and the teardown can delete the output the compiler keeps.
+            s_Wrappers = Assembly.Load(File.ReadAllBytes(s_OutputDir + "/" + c_Host + ".dll"));
+        }
+
+        /// <summary>The compiler keeps its output directory, so this fixture owns deleting it.</summary>
+        [OneTimeTearDown]
+        public void DeleteCompilerOutput()
+        {
+            try
+            {
+                if (Directory.Exists(s_OutputDir)) Directory.Delete(s_OutputDir, true);
+            }
+            catch (IOException)
+            {
+            }
         }
 
         private static Type Wrapper(string name) => s_Wrappers.GetType("WrappedUnityInternalsFixture." + name, true);

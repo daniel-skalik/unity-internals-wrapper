@@ -51,9 +51,10 @@ namespace UnityInternalsFixture
         internal int Shift(int by) => X + by;
     }
 
-    /// <summary>Only an indexer, so selecting it pulls in exactly the wrapped type its index parameter needs.</summary>
+    /// <summary>Two indexers, so their ids must stay apart; the Point one pulls in exactly the wrapped type its index parameter needs.</summary>
     internal class Grid
     {
+        internal int this[int index] => index;           // same member name 'Item' as the one below
         internal int this[Point p] => p.X;               // index parameter of a wrapped type
     }
 
@@ -109,17 +110,30 @@ namespace UnityInternalsFixture
         internal abstract int Kind();
     }
 
-    internal class ReservedNames
+    /// <summary>Derives from a public base, so its wrapper declares Target and the name is reserved.</summary>
+    internal class ReservedNames : FixtureNode
     {
         internal int Wrap() => 1;                           // NameCollision: reserved by the wrapper
         internal int Target => 2;                           // NameCollision: reserved by the wrapper
         internal int Fine => 3;                             // Wrapped
     }
 
-    internal class ReservedNested
+    internal class ReservedNested : FixtureNode
     {
         internal int Fine => 3;                             // Wrapped
         internal enum Target { A }                          // NameCollision: reserved by the wrapper
+    }
+
+    /// <summary>A struct wrapper declares no Target, so a member may take the name.</summary>
+    internal struct Spot
+    {
+        internal int Target;                                // Wrapped
+    }
+
+    /// <summary>A class wrapper over object declares no Target either, so a nested type may take the name.</summary>
+    internal class Unreserved
+    {
+        internal enum Target { A }                          // Wrapped
     }
 
     internal ref struct FixtureRefStruct { }    // Unsupported: a ref struct fits no wrapper shape

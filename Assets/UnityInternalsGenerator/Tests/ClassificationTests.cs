@@ -94,6 +94,21 @@ namespace DandaUtils.Editor.UnityInternalsGenerator.Tests
         }
 
         [Test]
+        public void Types_TargetName_ReservedOnlyWhereTheWrapperDeclaresIt()
+        {
+            var ctx = NewContext();
+            ctx.ClassifyAll();
+
+            Assert.IsTrue(ctx.DeclaresTarget(Fixture("ReservedNames")), "public base");
+            Assert.IsTrue(ctx.DeclaresTarget(Fixture("Twig")), "inherits the root wrapper Target");
+            Assert.IsFalse(ctx.DeclaresTarget(Fixture("Holder")), "base is object");
+            Assert.IsFalse(ctx.DeclaresTarget(Fixture("Spot")), "struct wrapper");
+            Assert.IsFalse(ctx.DeclaresTarget(Fixture("IThing")), "interface wrapper");
+
+            AssertStatus(ctx, "Unreserved+Target", WrapStatus.Wrapped);
+        }
+
+        [Test]
         public void Types_GenericDefinition_Unsupported()
         {
             AssertStatus(NewContext(), "Generic`1", WrapStatus.Unsupported);
